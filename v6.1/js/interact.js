@@ -9,7 +9,10 @@
 //  A pointer picks in two ways, in this order:
 //
 //    TOUCH   the index fingertip is inside a target's sphere. Reaching
-//            out and putting your finger on a butterfly always wins.
+//            out and putting your finger on a butterfly wins over the
+//            ray once it's been there a moment (see ROUND 3's touch
+//            dwell below -- a single frame of passing-by proximity no
+//            longer counts).
 //    POINT   otherwise, a ray from an estimated SHOULDER point through
 //            the fingertip (v6.1 -- see below; was knuckle-through-tip
 //            in v6). The keyboard is 1.15 m away -- far enough that it
@@ -88,6 +91,31 @@
 //              hysteresis gap) address the noise and the threshold fit
 //              together -- smoothing alone can't fix a signal that's
 //              systematically a little wide at occlusion.
+//
+//  v6.1 ROUND 3 -- two things remained after round 2:
+//
+//    THE PINCH STILL SOMETIMES DIDN'T REGISTER. A SINGLE untracked frame
+//              used to reset closed/smPinch/pinchInit/lockId/lastHotId
+//              unconditionally -- and Quest hand tracking commonly loses
+//              confidence for a frame or two exactly as fingers occlude
+//              each other, i.e. exactly at a real pinch. None of round
+//              2's smoothing runs on an untracked frame at all, so it
+//              was structurally blind to this. A dropout under
+//              `CFG.trackLossGraceMs` now just holds every value where
+//              it was (the line still hides -- honest about not knowing
+//              where the hand is) instead of discarding a pinch already
+//              in progress; only a genuinely sustained loss still resets.
+//              `pinchOn`/`pinchOff` are deliberately NOT widened again --
+//              that would make an accidental touch read as a deliberate
+//              pinch, working against the next point.
+//    STILL TOO EASY TO ACCIDENTALLY SELECT. `pickTouch()` won outright
+//              over the stabilised ray on a SINGLE frame of proximity,
+//              with no memory -- a hand travelling toward an intended
+//              target routinely passes within touch range of unintended
+//              neighbours en route. A touch pick now has to hold on the
+//              SAME target for `CFG.touchDwellMs` before it can override
+//              the ray -- short enough a deliberate touch still feels
+//              instant, long enough to filter a pass-through.
 // ============================================================
 AFRAME.registerComponent('pointer-input', {
   init: function () {
@@ -97,12 +125,14 @@ AFRAME.registerComponent('pointer-input', {
         smAim: new THREE.Vector3(), smInit: false,
         lastHotId: null, lastHotAt: -Infinity, flashT: 0,
         lockId: null, lockChallengeId: null, lockChallengeAt: -Infinity,
-        smPinch: 0, pinchInit: false },
+        smPinch: 0, pinchInit: false,
+        trackLostAt: null, touchCandId: null, touchCandSince: -Infinity },
       { kind: 'hand', side: 'right', closed: false, hover: null, at: new THREE.Vector3(),
         smAim: new THREE.Vector3(), smInit: false,
         lastHotId: null, lastHotAt: -Infinity, flashT: 0,
         lockId: null, lockChallengeId: null, lockChallengeAt: -Infinity,
-        smPinch: 0, pinchInit: false },
+        smPinch: 0, pinchInit: false,
+        trackLostAt: null, touchCandId: null, touchCandSince: -Infinity },
       { kind: 'mouse',               click: false,  hover: null, at: new THREE.Vector3() }
     ];
 
@@ -360,13 +390,30 @@ AFRAME.registerComponent('pointer-input', {
         var rig = handRig(p.side);
         var line = this.lines[i];
         if (!rig || !rig.tracked) {
+          //  v6.1 round 3 -- TRACKING-LOSS FORGIVENESS. A single untracked
+          //  frame used to reset everything below unconditionally, but
+          //  Quest hand tracking commonly loses confidence for a frame or
+          //  two exactly as fingers occlude each other -- exactly at a
+          //  real pinch -- so a pinch genuinely in progress was getting
+          //  discarded by this reset before it could complete. The line
+          //  still hides immediately (honest about not knowing where the
+          //  hand is), but everything else -- closed/smPinch/pinchInit/
+          //  lockId/lastHotId/smAim/smInit -- now just holds still through
+          //  a brief dropout. Only a dropout that outlasts
+          //  CFG.trackLossGraceMs does the original full reset.
           if (line) { line.visible = false; }
-          p.hover = null; p.closed = false; p.smInit = false;
-          p.lastHotId = null; p.flashT = 0;
-          p.lockId = null; p.lockChallengeId = null; p.lockChallengeAt = -Infinity;
-          p.pinchInit = false;
+          p.hover = null;
+          if (p.trackLostAt == null) { p.trackLostAt = time; }
+          if (time - p.trackLostAt > CFG.trackLossGraceMs) {
+            p.closed = false; p.smInit = false;
+            p.lastHotId = null; p.flashT = 0;
+            p.lockId = null; p.lockChallengeId = null; p.lockChallengeAt = -Infinity;
+            p.pinchInit = false;
+            p.touchCandId = null; p.touchCandSince = -Infinity;
+          }
           continue;
         }
+        p.trackLostAt = null;
         p.at.copy(rig.indexTip);              // capture point stays raw/exact
 
         //  Smoothing lives here, on the pointer's own state, not in
@@ -401,7 +448,29 @@ AFRAME.registerComponent('pointer-input', {
         // this.pick()'s signature has no room for.
         var panelPick = this.pickRay(targets, this._o, this._d, true);
         var flyPick = this.pickFlySticky(targets, this._o, this._d, p, time);
-        picked = this.pickTouch(targets, rig.indexTip) || panelPick || flyPick;
+
+        //  TOUCH DWELL (v6.1 round 3). pickTouch() itself is untouched --
+        //  still the same nearest-within-radius scan -- but it used to win
+        //  outright over the ray/hover-lock on a SINGLE frame of
+        //  proximity, with no memory at all. A hand travelling through the
+        //  swarm toward an intended target routinely passes within touch
+        //  range of unintended neighbours en route; any one of those could
+        //  instantly steal the pick. Now a touch has to be the SAME
+        //  nearest target continuously for CFG.touchDwellMs before it's
+        //  allowed to override the ray -- short enough (about half
+        //  hoverLockMs) that a deliberate touch-and-hold still feels
+        //  instant, long enough to filter a pass-through. Losing touch
+        //  range releases the candidate immediately, no dwell on the way
+        //  out, matching hover lock's own "plainly left -> no delay" rule.
+        var touchRaw = this.pickTouch(targets, rig.indexTip);
+        var touchPick = null;
+        if (touchRaw) {
+          if (p.touchCandId !== touchRaw.id) { p.touchCandId = touchRaw.id; p.touchCandSince = time; }
+          if (time - p.touchCandSince >= CFG.touchDwellMs) { touchPick = touchRaw; }
+        } else {
+          p.touchCandId = null; p.touchCandSince = -Infinity;
+        }
+        picked = touchPick || panelPick || flyPick;
 
         //  Pinch smoothing (v6.1 round 2): rig.pinch is raw, and Quest
         //  hand tracking is noisiest right as fingers occlude each other

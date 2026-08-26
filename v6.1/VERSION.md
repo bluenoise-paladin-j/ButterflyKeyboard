@@ -64,6 +64,33 @@ round 2"; in short, still just `interact.js`/`keyboard.js`/`config.js`:
   more steeply near the edge, rather than flattening every neighbour toward the same
   speed (which would make them easier, not harder, accidental targets).
 
+### Round 3 — off on-headset feedback on round 2
+
+Two things remained (pinch reliability, accidental selection), plus two direct asks
+(confirm the accept press, shrink the UI). Full detail in `CLAUDE.md`'s "Selection,
+round 3"; still just `interact.js`/`keyboard.js`/`config.js`:
+
+- **Tracking-loss forgiveness.** A single untracked frame used to fully reset the
+  pinch/lock state — and Quest hand tracking commonly drops for a frame or two exactly
+  as fingers occlude each other, i.e. exactly at a real pinch, discarding one already in
+  progress. A dropout under `CFG.trackLossGraceMs` (200ms) now just hides the line and
+  holds every value where it was; only a sustained loss still resets. `pinchOn`/
+  `pinchOff` deliberately NOT widened again — that would make an accidental touch read
+  as a deliberate pinch, working against the next point.
+- **Touch dwell.** `pickTouch()` used to win outright over the ray/hover-lock on a
+  single frame of proximity — a hand passing near a neighbour en route to the real
+  target could steal the pick instantly. A touch now has to hold on the same target for
+  `CFG.touchDwellMs` (120ms) before it can override the ray.
+- **An accept confirmation.** Accept used to get the same press-bounce as delete, then
+  the panel just dimmed. Now `bump()` takes an optional bigger kick
+  (`CFG.acceptConfirmKick`, accept only) and the caught name itself gets a synchronized
+  pulse, same spring math as the buttons. Measured: an ordinary press peaks at 1.35×;
+  accept's button peaks at 1.79×, the name at 1.77×, essentially in lockstep.
+- **A smaller UI.** `CFG.blobW`/`blobH` walked back from `0.200/0.176` to `0.160/0.140`
+  — essentially v4's own shipped size, not a guess. A genuine ~20% area reduction that
+  also tightens round 2's pick tolerances further (accept ≈0.22m→≈0.19m, delete
+  ≈0.19m→≈0.16m) as a happy accident, reinforcing the touch-dwell/hover-lock fixes.
+
 ## What this is
 
 v4 stripped back, and the controls given weight. **The interaction is unchanged** —
@@ -232,19 +259,27 @@ decoration on top of a target that never moves relative to the thing you are aim
 | pinch smoothing | a raw sequence that never crosses the old 0.028 threshold crosses the new smoothed 0.033 as intended; a single wild outlier sample produces no spurious closed edge |
 | slow-field falloff | live values at 0/0.3/0.6/1.0 of `slowRadius` match the `slowFalloffPow` formula exactly; hot target settles at `slowHot` |
 | desktop capture/accept flow | unaffected by any round-2 change — CAT typed and accepted end to end on a clean load |
+| tracking-loss forgiveness, brief dropout | `closed`/`smPinch`/`lockId` byte-identical before and after a ~50ms synthetic dropout; line hides throughout; lock re-acquires with zero delay on resume |
+| tracking-loss forgiveness, sustained dropout | a 300ms dropout (past `trackLossGraceMs`=200ms) correctly returns `closed`/`smInit`/`lockId`/`pinchInit`/`lastHotId`/`touchCandId` to their reset defaults |
+| touch dwell, pass-through | a target held within touch range for ~50ms (under `touchDwellMs`=120ms), then left — never promoted |
+| touch dwell, held | the same target held past 120ms — promotes at the first tick ≥120ms (134ms), not before |
+| accept confirmation spring | ordinary press peaks 1.35×; accept's button peaks 1.79×, the name pulse 1.77×, essentially in lockstep; `reset()` mid-ring-down snaps both back to 1/0 |
+| smaller UI, pick math | live `blobW`/`blobH` (0.160/0.140) recompute to accept/delete ray tolerances of 0.189m/0.164m exactly as predicted; a synthetic offset between the round-2 and round-3 tolerance now misses, dead-on aim still hits; cluster half-widths (0.53m) stay well under `ctlGap` (0.82m) |
+| desktop capture/accept flow, round 3 | unaffected — FOX typed and accepted end to end on a clean load |
 
 **v6's flow was run on a physical Quest and confirmed working.** Round 1 of v6.1 (the
 shoulder ray, aim smoothing, grace window, line, slow field) got an on-headset pass and
-prompted round 2 above. Round 2 itself is verified only synthetically so far (see the
-rows above — the same fabricated-`rig`-state technique used throughout this file) and
-still needs its own on-headset pass: aim steadily at a genuinely close pair and confirm
-tremor no longer flickers the highlight while a deliberate swing still takes over
-promptly; reach for a butterfly whose path crosses near a control and confirm it no
-longer steals the pick; pinch at natural speed, several reps both hands, checking
-specifically for the "doesn't register" failure and that release still feels crisp;
-confirm the hot target reads noticeably calmer with a visibly graded (not uniform) falloff
-to its neighbours; two-handed reach into a dense cluster, confirming each hand's lock
-state stays independent.
+prompted round 2; round 2 (hover lock, panel tightening, pinch smoothing, slow-field
+retune) got an on-headset pass and prompted round 3 above. Round 3 itself is verified only
+synthetically so far (the rows above) and still needs its own on-headset pass: whether the
+flower at 0.160/0.140 still reads as six lobes, not one lump; whether the accept
+confirmation *feels* distinct, not just measures distinct; whether `touchDwellMs` feels
+responsive rather than laggy on a deliberate touch; whether `trackLossGraceMs` covers real
+occlusion dropouts without also swallowing a genuine hand-away transition (watch for a
+stale rescue firing against the wrong target after a hand comes back from being lowered).
+Everything from rounds 1-2's own on-headset checklist (aim steadily at a close pair, reach
+across the controls, pinch at natural speed both hands, two-handed reach into a dense
+cluster) is worth re-running too, since round 3 touches the same code paths.
 
 **Scene weight: 268 objects** — 144 meshes, 110 sprites, 14 lines, and `alphaTest` materials
 do not batch, so that is roughly the draw call count. (v4 was 225. Deleting the scatter

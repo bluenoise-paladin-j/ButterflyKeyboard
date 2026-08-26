@@ -157,6 +157,35 @@ var CFG = {
   //  one bad sample, short enough that activation still feels immediate.
   pinchSmoothTau: 0.035,    // seconds, EMA time constant on rig.pinch
 
+  //  v6.1 round 3 -- two things remained after round 2: the pinch still
+  //  sometimes didn't register at all, and it was still too easy to
+  //  accidentally select a neighbour.
+  //
+  //  trackLossGraceMs found the real cause of the first: on a SINGLE
+  //  untracked frame, tick() used to fully reset closed/smPinch/pinchInit/
+  //  lockId/etc -- and Quest hand tracking commonly loses confidence for a
+  //  frame or two exactly as fingers occlude each other, i.e. exactly at a
+  //  real pinch. A dropout this short now just hides the line and holds
+  //  every pinch/lock/aim value exactly where it was, so a pinch already
+  //  in progress survives the blip instead of being discarded by it. Only
+  //  a dropout that outlasts this window does the original full reset.
+  //
+  //  touchDwellMs closes the other gap round 2 didn't touch: pickTouch()
+  //  still won outright over the now-stabilised ray/hover-lock on a
+  //  SINGLE frame of proximity, with no memory at all -- so a hand simply
+  //  passing near a neighbour on the way to the real target could steal
+  //  the pick instantly. A touch now has to be the same nearest target
+  //  continuously for this long before it's allowed to override the ray.
+  //  Shorter than hoverLockMs since physical proximity is already a
+  //  stronger intent signal -- this only needs to filter a pass-through,
+  //  not damp genuine ambiguity.
+  //
+  //  pinchOn/pinchOff are deliberately NOT widened again this round:
+  //  that would make an accidental touch more likely to read as a
+  //  deliberate pinch, working directly against the second complaint.
+  trackLossGraceMs: 200,    // ms, a dropout this short holds state, not resets it
+  touchDwellMs:      120,   // ms a touch must stay on one target before it can win
+
   // ---- feedback ----
   hiScale:     1.45,        // a highlighted butterfly grows to this
   captureTime: 0.55,        // seconds to fly into the hand
@@ -211,11 +240,18 @@ var CFG = {
   nameBobRate: 0.28,
   nameFlyTime: 0.65,        // seconds for a caught letter to reach the name
 
-  //  THE TWO SHAPES. Much bigger than v4's, and each hung at its own
-  //  tilt and its own cant so neither sits square to the visitor.
+  //  THE TWO SHAPES. Was "much bigger than v4's" here on purpose; v6.1
+  //  round 3 walks that back -- "it takes up a lot of the space" -- to
+  //  essentially v4's own shipped size (blobW 0.155/blobH 0.140), rather
+  //  than an arbitrary guess. Each still hung at its own tilt and cant so
+  //  neither sits square to the visitor. This also tightens the pick
+  //  radius further on top of round 2's panelPickShrink (radius is
+  //  derived from these), which only helps the accidental-selection fix.
+  //  Pulled in much past this the six lobes merge back into one blob-lump
+  //  -- an on-headset judgement call, not something arithmetic settles.
   blobY:       -0.435,
-  blobW:       0.200,       // one lobe's radius; a cluster is ~2.9x this across
-  blobH:       0.176,
+  blobW:       0.160,       // was 0.200; one lobe's radius, cluster ~2.9x this across
+  blobH:       0.140,       // was 0.176
   ctlGap:      0.82,        // between the two, centre to centre
   blobPulse:   0.045,       // depth of the breathing
   blobDrift:   0.022,       // how far a shape floats from where it hangs
@@ -226,6 +262,15 @@ var CFG = {
   ctlSpring:   150,         // stiffness
   ctlDamp:     0.86,        // per frame at 60fps; under 1 = it rings
   ctlKick:     7.5,         // the impulse a press adds to the velocity
+
+  //  v6.1 round 3 -- "there needs to be confirmation the green button was
+  //  pressed." Both buttons already get ctlKick's bounce; accept gets a
+  //  bigger one on top (~1.77x peak vs an ordinary press's ~1.36x, same
+  //  ~80ms tempo -- bigger in amplitude, not a different animation
+  //  language), and the same kick also pulses the caught name itself
+  //  (keyboard.js:accept()/tickUI()) -- the thing actually being
+  //  confirmed, not just the button. Delete's press is unchanged.
+  acceptConfirmKick: 16,    // roughly 2x ctlKick, accept only
 
   maxName:     16,          // longest name the field will take
 

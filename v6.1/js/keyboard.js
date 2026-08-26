@@ -68,6 +68,11 @@ AFRAME.registerComponent('butterfly-keyboard', {
     this.buttons = [];
     this.nameSprites = [];
     this.nameScale = CFG.nameSize;
+    //  v6.1 round 3 -- the "was my accept press confirmed" pulse. Same
+    //  spring math tickUI() already uses for button scale, just a second
+    //  instance kicked alongside the accept button's own bigger bounce --
+    //  see accept()/tickUI().
+    this.confirmScale = 1; this.confirmVel = 0;
     this._camPos = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
 
@@ -302,9 +307,14 @@ AFRAME.registerComponent('butterfly-keyboard', {
   //  where it was, overshoots because it is under-damped, and rings down
   //  over about a second -- so pressing one is a thing that visibly
   //  happens to it rather than a state that quietly changes.
-  bump: function (id) {
+  //
+  //  v6.1 round 3: an optional kick lets accept's confirmation (see
+  //  activate()) bounce harder than delete's, without a second method --
+  //  every existing caller keeps the default CFG.ctlKick unchanged.
+  bump: function (id, kick) {
+    if (kick === undefined) { kick = CFG.ctlKick; }
     for (var i = 0; i < this.buttons.length; i++) {
-      if (this.buttons[i].id === id) { this.buttons[i].vel += CFG.ctlKick; return; }
+      if (this.buttons[i].id === id) { this.buttons[i].vel += kick; return; }
     }
   },
 
@@ -409,7 +419,9 @@ AFRAME.registerComponent('butterfly-keyboard', {
   //  butterfly has somewhere to fly to.
   activate: function (id, handPos) {
     if (this.done) { return; }
-    if (id === 'accept') { this.bump('accept'); this.accept(); return; }
+    // v6.1 round 3: accept gets a bigger bounce than the shared default --
+    // see bump()/config.js:acceptConfirmKick and the name pulse in accept().
+    if (id === 'accept') { this.bump('accept', CFG.acceptConfirmKick); this.accept(); return; }
     if (id === 'delete') { this.bump('delete'); this.backspace(); return; }
     for (var i = 0; i < this.keys.length; i++) {
       var k = this.keys[i];
@@ -457,6 +469,11 @@ AFRAME.registerComponent('butterfly-keyboard', {
   accept: function () {
     if (this.done || !this.typed.length) { return; }
     this.done = true;
+    //  v6.1 round 3: the confirmation. Kicks the SAME spring tickUI()
+    //  already runs for button scale, applied to the caught name itself --
+    //  the thing actually being confirmed, not just the button (which
+    //  gets its own bigger kick from activate()'s acceptConfirmKick).
+    this.confirmVel += CFG.acceptConfirmKick;
     this.refreshPanel();
     this.onAccept(this.typed);
 
@@ -468,6 +485,7 @@ AFRAME.registerComponent('butterfly-keyboard', {
   reset: function () {
     this.typed = '';
     this.done = false;
+    this.confirmScale = 1; this.confirmVel = 0;   // settled for the next visitor
     this.syncName();
     this.refreshPanel();
   },
@@ -575,6 +593,16 @@ AFRAME.registerComponent('butterfly-keyboard', {
   //  megabyte a frame to say the same thing.
   tickUI: function (t, dt) {
     var i;
+    //  v6.1 round 3 -- the accept confirmation pulse on the name. Same
+    //  spring integration as the button loop below (CFG.ctlSpring/
+    //  ctlDamp), just a second instance with its own resting value (1)
+    //  and its own kick source (accept()). Folded into both sp.set()
+    //  calls below via this.nameScale * this.confirmScale.
+    this.confirmVel += (1 - this.confirmScale) * CFG.ctlSpring * dt;
+    this.confirmVel *= Math.pow(CFG.ctlDamp, dt * 60);
+    this.confirmScale += this.confirmVel * dt;
+    if (this.confirmScale < 0.25) { this.confirmScale = 0.25; this.confirmVel = 0; }
+
     for (i = 0; i < this.nameSprites.length; i++) {
       var sp = this.nameSprites[i];
       sp.born = Math.min(1, sp.born + dt / 0.30);
@@ -593,12 +621,12 @@ AFRAME.registerComponent('butterfly-keyboard', {
                         sp.flyFrom.y + (slotY - sp.flyFrom.y) * f,
                         sp.flyFrom.z * (1 - f));
         // large and faint at the far end, settling as it lands
-        sp.set(this.nameScale * (1 + 1.6 * (1 - f)), (0.25 + 0.7 * f) * e);
+        sp.set(this.nameScale * this.confirmScale * (1 + 1.6 * (1 - f)), (0.25 + 0.7 * f) * e);
         if (sp.fly >= 1) { sp.flyFrom = null; }
       } else {
         sp.position.set(slotX, slotY, 0);
         // arrives a little large and settles, like something landing
-        sp.set(this.nameScale * (1 + 0.5 * (1 - e)), e * 0.95);
+        sp.set(this.nameScale * this.confirmScale * (1 + 0.5 * (1 - e)), e * 0.95);
       }
     }
     for (i = 0; i < this.buttons.length; i++) {

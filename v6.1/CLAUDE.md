@@ -220,6 +220,70 @@ accidental ray target than one still visibly drifting, so the contrast between "
 one" and "everything else nearby" has to stay legible; the goal is calming the immediate
 neighbourhood's own flight noise, not equalising speeds.
 
+## Selection, round 3: forgive the tracking, gate the touch
+
+Round 2 on-headset left two things: the pinch still sometimes didn't register, and it was
+still too easy to accidentally select a neighbour. Both traced to code round 2 never
+touched — this round doesn't widen `pinchOn`/`pinchOff` again (that would make an
+accidental touch read as a deliberate pinch, working against the second complaint), and
+doesn't touch the shared cone either.
+
+**Tracking-loss forgiveness.** `interact.js:tick()`'s untracked branch used to reset
+`closed`/`smPinch`/`pinchInit`/`lockId`/`lastHotId`/etc. unconditionally on a **single**
+untracked frame — and Quest hand tracking commonly loses confidence for a frame or two
+exactly as fingers occlude each other, i.e. exactly at a real pinch, discarding a pinch
+already in progress before it could complete. None of round 2's smoothing runs on an
+untracked frame at all (it's inside that same early-return), so it was structurally blind
+to this. Now a dropout under `CFG.trackLossGraceMs` (200ms) just hides the ray line
+(honest about not knowing where the hand is) and otherwise holds every value exactly where
+it was; only a dropout that outlasts that window does the original full reset. Verified
+directly: through a brief (~50ms) synthetic dropout, `closed`/`smPinch`/`lockId` are
+byte-identical before and after and the lock re-acquires with zero delay; through a
+sustained (300ms) one, everything correctly returns to its reset defaults.
+
+**Touch dwell.** `pickTouch()` itself is untouched (same nearest-within-`touchRadius`
+scan) — but it used to win outright over the now-stabilised ray/hover-lock on a **single
+frame** of proximity, with no memory at all. A hand travelling through the swarm toward an
+intended target routinely passes within touch range of unintended neighbours en route; any
+one of those could instantly steal the pick. A touch now has to be the *same* nearest
+target continuously for `CFG.touchDwellMs` (120ms, about half `hoverLockMs` since physical
+contact is already a stronger intent signal) before it's allowed to override
+`panelPick`/`flyPick`. Losing touch range releases the candidate instantly — no dwell on
+the way out, matching hover lock's own "plainly left → no delay" convention. Bonus effect:
+a graze that never clears the dwell window no longer becomes `picked`, so it can no longer
+pollute `p.lastHotId` either — the grace window can't be tricked into rescuing a butterfly
+the hand only brushed past.
+
+**An accept confirmation.** Pressing accept used to get the exact same press-bounce as
+delete, then the whole panel immediately dimmed — not distinct enough to read as "that
+worked." Two changes, both fired from `accept()`, both reusing the identical spring math
+`tickUI()` already runs for button scale (no new colours, no glow — state via colour/size
+only, never softness): `bump()` gained an optional `kick` parameter so accept can pass a
+bigger one (`CFG.acceptConfirmKick`, roughly 2× the shared `CFG.ctlKick`; delete's call
+site is byte-identical to before), and a second spring instance (`this.confirmScale`/
+`confirmVel`) pulses the caught name itself, multiplied into `this.nameScale` everywhere
+it's read. Measured directly against the real running springs: an ordinary press peaks at
+1.35×; accept's button peaks at 1.79× and the name at 1.77×, essentially in lockstep —
+bigger in *amplitude*, not *tempo*, so it reads as "the same bounce, bigger," and the name
+— the thing actually being confirmed — visibly responds too, not just the button.
+`reset()` snaps the name pulse back to its rest state for the next visitor even if caught
+mid-ring-down.
+
+**A smaller UI.** `CFG.blobW`/`blobH` walked back from `0.200/0.176` to `0.160/0.140` —
+not a guess: `versions/v4/js/config.js` shipped `blobW: 0.155, blobH: 0.140`, the actual
+prior size this file's "much bigger than v4's" was contrasting against, and a size already
+proven not to blob-lump. A genuine ~20% area reduction from where v6.1 started, while
+v6.1's own larger per-control `k` multipliers (1.26 accept / 1.02 delete, vs v4's 1.12/
+0.90) still carry over unchanged, so accept still reads moderately bigger than v4's ever
+did — a real shrink, not a full revert. No compensating change needed to `ctlGap` (cluster
+half-widths only get *more* clearance, not less, once the shapes shrink — verified: 0.53m
+combined half-width against `ctlGap`'s 0.82m). The shrink also tightens round 2's pick
+math further (a happy accident, verified: accept's ray tolerance ≈0.22m → ≈0.19m, delete's
+≈0.19m → ≈0.16m) — reinforcing "too easy to accidentally select" on top of that round's own
+fix. Whether the six lobes still read as six lobes rather than one blob-lump at this size
+is an on-headset judgement call CLAUDE.md's own earlier warning about this only poses
+qualitatively — arithmetic can't settle it.
+
 ## Flat, and how to keep it flat
 
 No blur, no bloom, no gradients, no soft glow anywhere. Every surface is one solid colour:
