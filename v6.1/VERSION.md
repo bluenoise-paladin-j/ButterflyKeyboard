@@ -15,14 +15,21 @@ it should be, and the swarm's motion risked motion sickness. Full detail in
 `CLAUDE.md`'s "Selection, made easier (v6.1)"; in short, all inside `interact.js` and
 `keyboard.js`, no new files:
 
-- The pointing ray is smoothed (`CFG.aimSmoothTau`) so a hover no longer flickers on
-  raw hand-tracking jitter.
-- A pinch's rising edge now rescues the last butterfly a hand had hot within
-  `CFG.pickGraceMs`, covering the finger-curl that perturbs the ray at the exact moment
-  a pinch commits. Never rescues the two controls — a wrong accept/delete costs more
-  than a missed letter.
-- The ray line now bends to touch whatever is actually picked instead of gesturing a
-  fixed distance toward it, and flashes briefly on a catch.
+- The ray's origin moved from the index knuckle to an estimated **shoulder** point
+  (`CFG.shoulderDown`/`shoulderOut`, derived from the camera pose each tick) — the same
+  model Meta's own hand-pointing UI uses. The knuckle-to-fingertip baseline was ~3cm, so
+  the finger curl of closing a pinch alone could swing the aim by tens of degrees; a
+  ~60-80cm shoulder-to-fingertip baseline swings by a couple of degrees for the same
+  curl. Measured: a realistic pinch-close curl that puts the old math 0.70m off axis
+  against a 0.27m tolerance (a clean miss) leaves the new ray still on target.
+- The pointing ray's aim point is also smoothed (`CFG.aimSmoothTau`) so a hover doesn't
+  flicker on residual raw hand-tracking jitter.
+- A pinch's rising edge still rescues the last butterfly a hand had hot within
+  `CFG.pickGraceMs`, covering what the shoulder ray doesn't fully remove. Never rescues
+  the two controls — a wrong accept/delete costs more than a missed letter.
+- The ray line still visually starts at the fingertip, but now bends to touch whatever
+  is actually picked (its exact live position) instead of gesturing a fixed distance
+  toward it, and flashes briefly on a catch.
 - A hot butterfly, and its neighbours on a falloff, ease into a calmer flight while
   reached for, and ease back out once released (`CFG.slowHot`/`slowRadius`/`slowEase`).
   The swarm's baseline cruising speed is untouched.

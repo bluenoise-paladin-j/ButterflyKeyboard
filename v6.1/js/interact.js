@@ -10,12 +10,13 @@
 //
 //    TOUCH   the index fingertip is inside a target's sphere. Reaching
 //            out and putting your finger on a butterfly always wins.
-//    POINT   otherwise, a ray from the index knuckle through the index
-//            fingertip. The keyboard is 1.15 m away -- far enough that
-//            it reads as butterflies hanging in the room rather than a
-//            panel stuck to your face, and further than most people
-//            can comfortably reach -- so pointing is the normal case
-//            and touching is the bonus.
+//    POINT   otherwise, a ray from an estimated SHOULDER point through
+//            the fingertip (v6.1 -- see below; was knuckle-through-tip
+//            in v6). The keyboard is 1.15 m away -- far enough that it
+//            reads as butterflies hanging in the room rather than a
+//            panel stuck to your face, and further than most people can
+//            comfortably reach -- so pointing is the normal case and
+//            touching is the bonus.
 //
 //  "Reach toward a butterfly, it highlights" is satisfied by either.
 //
@@ -26,40 +27,51 @@
 //  Nothing here knows what a target is. It asks the keyboard for
 //  spheres and hands back ids.
 //
-//  v6.1 -- two things made real hand tracking harder to select with than
-//  it needed to be, and both are fixed here rather than by widening the
-//  pick cone (see config.js: the cone is already tuned right up against
-//  the point where neighbours start blobbing together):
+//  v6.1 -- three things made real hand tracking harder to select with
+//  than it needed to be, and all three are fixed here rather than by
+//  widening the pick cone (see config.js: the cone is already tuned
+//  right up against the point where neighbours start blobbing together):
 //
+//    THE RAY'S OWN ORIGIN WAS THE NOISE SOURCE. v6 cast from the index
+//              knuckle through the fingertip -- a ~3cm baseline, so a
+//              few millimetres of finger curl during a pinch swung the
+//              aim by tens of degrees. This is exactly what Meta's own
+//              hand-pointing model (the ray Quest's system UI casts)
+//              avoids: it anchors the ray near the SHOULDER instead,
+//              aimed through the hand. A ~60-80cm baseline means the
+//              same finger curl swings the aim by a couple of degrees,
+//              often less than the pick cone's own slack. `shoulderOf()`
+//              below estimates that point each tick from the camera
+//              pose (there is no tracked shoulder joint to read).
 //    JITTER    hands.js deliberately publishes raw, unfiltered joints, so
-//              a hover flickers on and off a target it is plainly sitting
-//              on. `smOrigin`/`smDir` are an exponential moving average of
-//              the ray's origin/direction, per hand, used for the POINT
-//              pick only -- touch stays on the raw fingertip, and the
-//              mouse pointer has no jitter to smooth.
-//    THE PINCH ITSELF PERTURBS THE PICK. Closing a pinch curls the index
-//              finger, which moves the very fingertip the ray is built
-//              from, so the most common miss is being visibly on a
-//              butterfly right up until the frame the pinch commits.
-//              `lastHotId`/`lastHotAt` remember what a hand had hot; a
-//              pinch's rising edge with nothing picked that exact frame
-//              still activates the remembered target if it was hot within
-//              `CFG.pickGraceMs` -- butterflies only, never the two
-//              controls (see the grace-window check in tick()).
+//              a hover could still flicker on residual noise even with a
+//              stable ray origin. `smAim` is an exponential moving
+//              average of the fingertip the ray is aimed through, per
+//              hand, used for the POINT pick only -- touch stays on the
+//              raw fingertip, and the mouse pointer has no jitter to
+//              smooth.
+//    THE PINCH ITSELF CAN STILL PERTURB THE PICK, just far less than
+//              before. `lastHotId`/`lastHotAt` remember what a hand had
+//              hot; a pinch's rising edge with nothing picked that exact
+//              frame still activates the remembered target if it was hot
+//              within `CFG.pickGraceMs` -- butterflies only, never the
+//              two controls (see the grace-window check in tick()).
 //
-//  The ray line also now bends to touch whatever is actually picked,
-//  instead of just gesturing toward it, and flashes briefly on a catch --
-//  both free reads of the same pick data, no new raycasts.
+//  The ray line still visually emanates from the fingertip -- only the
+//  invisible shoulder anchor moved, not what you see -- and now bends to
+//  touch whatever is actually picked instead of just gesturing toward
+//  it, and flashes briefly on a catch. All free reads of the same pick
+//  data, no new raycasts.
 // ============================================================
 AFRAME.registerComponent('pointer-input', {
   init: function () {
     this.kb = null;
     this.pointers = [
       { kind: 'hand', side: 'left',  closed: false, hover: null, at: new THREE.Vector3(),
-        smOrigin: new THREE.Vector3(), smDir: new THREE.Vector3(), smInit: false,
+        smAim: new THREE.Vector3(), smInit: false,
         lastHotId: null, lastHotAt: -Infinity, flashT: 0 },
       { kind: 'hand', side: 'right', closed: false, hover: null, at: new THREE.Vector3(),
-        smOrigin: new THREE.Vector3(), smDir: new THREE.Vector3(), smInit: false,
+        smAim: new THREE.Vector3(), smInit: false,
         lastHotId: null, lastHotAt: -Infinity, flashT: 0 },
       { kind: 'mouse',               click: false,  hover: null, at: new THREE.Vector3() }
     ];
@@ -70,6 +82,12 @@ AFRAME.registerComponent('pointer-input', {
     this._ndc = new THREE.Vector2(0, 0);
     this._ray = new THREE.Raycaster();
     this._mouseIn = false;
+
+    // shoulder-ray scratch: a per-tick camera read, shared by both hands
+    this._camPos = new THREE.Vector3();
+    this._camX = new THREE.Vector3();
+    this._camY = new THREE.Vector3();
+    this._camZ = new THREE.Vector3();
 
     this.buildRayLines();
     this.bindMouse();
@@ -177,12 +195,43 @@ AFRAME.registerComponent('pointer-input', {
            this.pickRay(targets, origin, dir, false);
   },
 
+  //  v6.1 -- an estimated shoulder point for `side`, derived from the
+  //  camera pose each tick (there is no tracked shoulder joint). Down by
+  //  `CFG.shoulderDown` from the headset, and out by `CFG.shoulderOut`
+  //  along the camera's HORIZONTAL right axis -- flattened to the XZ
+  //  plane so a shoulder does not swing up or tilt when you look up or
+  //  down, the way your actual shoulders do not. Requires `updateCamera()`
+  //  to have been called this tick.
+  shoulderOf: function (side, out) {
+    out.copy(this._camPos);
+    out.y -= CFG.shoulderDown;
+    out.addScaledVector(this._camX, CFG.shoulderOut * (side === 'left' ? -1 : 1));
+    return out;
+  },
+
+  //  Camera position and a FLATTENED right axis, read once per tick and
+  //  shared by both hands (shoulderOf() just adds a per-side sign).
+  //  Flattening (zeroing Y, renormalising) keeps the estimated shoulders
+  //  level even if the headset pitches or rolls.
+  updateCamera: function () {
+    var cam = this.el.sceneEl.camera;
+    if (!cam) { return false; }
+    cam.updateMatrixWorld();
+    cam.getWorldPosition(this._camPos);
+    cam.matrixWorld.extractBasis(this._camX, this._camY, this._camZ);
+    this._camX.y = 0;
+    if (this._camX.lengthSq() < 1e-6) { this._camX.set(1, 0, 0); }  // looking straight up/down
+    this._camX.normalize();
+    return true;
+  },
+
   tick: function (time, delta) {
     var kb = this.keyboard();
     if (!kb) { return; }
     var targets = kb.targets();
     var hot = {};
     var dt = Math.min(0.1, (delta || 16.7) / 1000);
+    var haveCam = this.updateCamera();
 
     // built once per tick so the grace-window rescue below can look a
     // remembered id back up against LIVE targets, not a stale snapshot
@@ -208,19 +257,25 @@ AFRAME.registerComponent('pointer-input', {
         //  Smoothing lives here, on the pointer's own state, not in
         //  hands.js -- the raw joint reader stays raw for anything else
         //  that ever reads it. EMA rather than a fixed-N average so it
-        //  is frame-rate independent and needs no history buffer.
+        //  is frame-rate independent and needs no history buffer. Only
+        //  the fingertip needs smoothing now -- the ray's ORIGIN is the
+        //  shoulder estimate below, not a second noisy joint.
         if (!p.smInit) {
-          p.smOrigin.copy(rig.indexTip);
-          p.smDir.copy(rig.indexTip).sub(rig.indexKnuckle).normalize();
+          p.smAim.copy(rig.indexTip);
           p.smInit = true;
         } else {
           var a = 1 - Math.exp(-dt / CFG.aimSmoothTau);
-          p.smOrigin.lerp(rig.indexTip, a);
-          this._d.copy(rig.indexTip).sub(rig.indexKnuckle).normalize();
-          p.smDir.lerp(this._d, a).normalize();
+          p.smAim.lerp(rig.indexTip, a);
         }
-        this._o.copy(p.smOrigin);
-        this._d.copy(p.smDir);
+
+        //  THE RAY. Shoulder to (smoothed) fingertip -- a long baseline,
+        //  so the finger curl that happens as a pinch closes barely
+        //  moves the aim (see the header comment). Falls back to the old
+        //  knuckle-anchored origin on the very first tick or two before
+        //  the camera pose is available, rather than skipping the pick.
+        if (haveCam) { this.shoulderOf(p.side, this._o); }
+        else { this._o.copy(rig.indexKnuckle); }
+        this._d.copy(p.smAim).sub(this._o).normalize();
 
         // touch stays on the RAW fingertip; only the ray's aim is smoothed
         picked = this.pickTouch(targets, rig.indexTip) ||
@@ -234,20 +289,21 @@ AFRAME.registerComponent('pointer-input', {
         if (line) {
           p.flashT = Math.max(0, p.flashT - dt / CFG.flashTime);
           var baseOp = picked ? 0.85 : 0.35;
-          //  THE LINE CONNECTS. When something is picked the endpoint is
-          //  its actual live position (projected along the ray, so it
-          //  never overshoots or bends backward), not just a longer
-          //  segment gesturing at it -- so what you see is exactly what
-          //  would activate.
-          var dist = 0.35;
+          //  THE LINE STILL VISUALLY COMES FROM THE HAND -- only the
+          //  invisible ray origin used for picking moved to the shoulder
+          //  estimate, not what is drawn. THE LINE CONNECTS: when
+          //  something is picked the endpoint is its actual live
+          //  position, exactly, not a projection that merely passes near
+          //  it -- so what you see is exactly what would activate.
+          var end;
           if (picked) {
-            this._w.copy(picked.pos).sub(this._o);
-            dist = Math.max(0.1, this._w.dot(this._d));
+            end = picked.pos;
+          } else {
+            end = this._w.copy(this._d).multiplyScalar(0.35).add(rig.indexTip);
           }
-          var end = this._w.copy(this._d).multiplyScalar(dist).add(this._o);
           var arr = line.geometry.attributes.position.array;
-          arr[0] = this._o.x; arr[1] = this._o.y; arr[2] = this._o.z;
-          arr[3] = end.x;     arr[4] = end.y;     arr[5] = end.z;
+          arr[0] = rig.indexTip.x; arr[1] = rig.indexTip.y; arr[2] = rig.indexTip.z;
+          arr[3] = end.x;          arr[4] = end.y;          arr[5] = end.z;
           line.geometry.attributes.position.needsUpdate = true;
           // a brief opacity pulse on a catch, decaying over flashT -- no
           // new geometry, no glow, just brighter ink for a moment

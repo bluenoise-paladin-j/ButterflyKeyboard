@@ -94,35 +94,50 @@ The cone above is a fixed geometric budget, already tuned right up against a har
 ceiling — neighbours sit about 0.6 m apart, and slack much past a quarter of that turns
 several of them into one unhittable blob, a regression already found and fixed once (see
 `CFG.pickBase`/`pickAngle` further down). So v6.1 does not touch it. Instead it fixes the
-two things that were actually making real hand tracking hard to select with, both noise-
-driven rather than geometric:
+three things that were actually making real hand tracking hard to select with, none of
+them geometric:
 
-- **Jitter.** `hands.js` deliberately publishes raw, unfiltered joint positions — that's
-  correct, filtering belongs one layer up. Nothing was doing that filtering, so a hover
-  would flicker on and off a target it was plainly sitting on. `interact.js` now keeps a
-  per-hand exponential moving average of the pointing ray's origin and direction
+- **The ray's own origin was the noise source.** v6 cast from the index knuckle through
+  the fingertip — a ~3cm baseline, so a few millimetres of finger curl *while closing a
+  pinch* swung the aim by tens of degrees: the single most common miss was being visibly
+  on a butterfly right up until the frame the pinch committed. This is exactly what
+  Meta's own hand-pointing model (the ray Quest's system UI casts) avoids, by anchoring
+  the ray near the **shoulder** instead of the hand. There is no tracked shoulder joint,
+  so `interact.js:shoulderOf()` estimates one each tick from the camera pose —
+  `CFG.shoulderDown` below the headset, `CFG.shoulderOut` to the side along the camera's
+  flattened (yaw-only) right axis, mirrored per hand — and the ray runs from there
+  through the fingertip. A ~60-80cm baseline means the same finger curl swings the aim
+  by a couple of degrees, often less than the pick cone's own slack. Measured directly:
+  a realistic ~2.7cm pinch-close curl that puts the OLD knuckle-anchored math 0.70 m off
+  axis against a 0.27 m tolerance (a clean miss) leaves the new shoulder-anchored ray
+  still on target. The line drawn for the user still visually starts at the fingertip —
+  only the invisible point used for picking moved.
+- **Residual jitter.** `hands.js` deliberately publishes raw, unfiltered joint
+  positions — that's correct, filtering belongs one layer up. `interact.js` keeps a
+  per-hand exponential moving average of the fingertip the ray is aimed through
   (`CFG.aimSmoothTau`, in `tick()`), used for the ray pick only — touch stays on the raw
-  fingertip (it's a deliberate close-range action, not the noisy long-range case), and the
-  desktop mouse pointer has no jitter to smooth.
-- **The pinch perturbs the pick.** Activation only ever fired if a target was picked on
-  the exact frame the pinch crossed its threshold — but closing a pinch curls the index
-  finger, moving the very fingertip the ray is built from, so the single most common miss
-  was being visibly on a butterfly right up until the frame the pinch committed.
-  `interact.js` now remembers each hand's last hot id and when (`lastHotId`/`lastHotAt`);
-  a pinch's rising edge with nothing picked that exact frame still activates the
-  remembered target if it was hot within `CFG.pickGraceMs`. **Butterflies only** — the two
-  controls keep the exact old behaviour with no rescue, since a wrong accept/delete costs
-  more than a missed letter, and they're fixed in place and easier to hit anyway.
-  `keyboard.js:activate()` already re-validates a key's state before capturing, so a stale
-  rescue (already captured by the other hand, mid-flight out) just silently no-ops.
+  fingertip (it's a deliberate close-range action, not the noisy long-range case), and
+  the desktop mouse pointer has no jitter to smooth.
+- **What the shoulder ray doesn't fully remove.** Activation only ever fired if a
+  target was picked on the exact frame the pinch crossed its threshold.
+  `interact.js` remembers each hand's last hot id and when (`lastHotId`/`lastHotAt`); a
+  pinch's rising edge with nothing picked that exact frame still activates the
+  remembered target if it was hot within `CFG.pickGraceMs`. **Butterflies only** — the
+  two controls keep the exact old behaviour with no rescue, since a wrong accept/delete
+  costs more than a missed letter, and they're fixed in place and easier to hit anyway.
+  `keyboard.js:activate()` already re-validates a key's state before capturing, so a
+  stale rescue (already captured by the other hand, mid-flight out) just silently
+  no-ops.
 
 **The line now literally connects.** It used to be a fixed-length segment gesturing along
 the pointing direction; now, whenever something is picked, its endpoint is that target's
-actual live position, so what you see is exactly what would activate. Same dark, subtle
-ink (`0x12121a`), same opacity behaviour — just aimed at something real instead of a
-fixed distance. A successful catch also gives the line a brief opacity flash
-(`CFG.flashTime`) that eases back down — pure opacity on existing geometry, no new
-meshes, no glow, matching "Flat" below.
+exact live position (not a projection along the ray — the shoulder anchor above means the
+ray's own origin is no longer where the line is drawn from, so the endpoint is set
+directly rather than derived from the ray math), so what you see is exactly what would
+activate. It still visually starts at the fingertip, same dark, subtle ink (`0x12121a`),
+same opacity behaviour — only the invisible picking origin moved. A successful catch also
+gives the line a brief opacity flash (`CFG.flashTime`) that eases back down — pure
+opacity on existing geometry, no new meshes, no glow, matching "Flat" below.
 
 **A hot butterfly, and its neighbours, fly calmer.** Exhibition feedback flagged the
 swarm's motion as a motion-sickness risk. Rather than slow the whole swarm at all times —

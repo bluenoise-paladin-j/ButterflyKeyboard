@@ -84,18 +84,30 @@ var CFG = {
   //  into one blob -- see the note further down). So easier selection comes
   //  from calming the SIGNAL feeding the cone, not widening the cone:
   //
-  //  aimSmoothTau damps raw joint jitter out of the pointing ray before it
-  //  is tested against anything, so a hover does not flicker on and off a
-  //  target it is plainly sitting on.
+  //  shoulderDown/shoulderOut place the ray's ORIGIN, not its aim. v6 cast
+  //  from the index knuckle through the fingertip -- a ~3cm baseline, so a
+  //  few millimetres of finger curl during a pinch swung the aim by tens
+  //  of degrees. This mirrors Meta's own hand-pointing model (the ray
+  //  Quest's system UI casts): anchor the ray near the SHOULDER instead,
+  //  aimed through the hand. There is no tracked shoulder joint, so
+  //  interact.js:shoulderOf() estimates one each tick from the camera
+  //  pose -- down by shoulderDown, out by shoulderOut along the camera's
+  //  flattened (yaw-only) right axis, mirrored per hand. A ~60-80cm
+  //  baseline means the same finger curl swings the aim by a couple of
+  //  degrees, often less than the cone's own slack.
   //
-  //  pickGraceMs covers the other failure: closing a pinch curls the index
-  //  finger, which moves the very fingertip the ray is built from, so the
-  //  most common miss is being visibly on a butterfly right up until the
-  //  frame the pinch commits. A pinch's rising edge with nothing picked
-  //  that exact frame still activates whatever this hand had hot within
-  //  this many milliseconds -- butterflies only, never the two controls,
-  //  which are fixed in place, easier to hit anyway, and where a wrong
-  //  guess (an accidental accept/delete) costs more than a missed letter.
+  //  aimSmoothTau damps residual raw joint jitter out of the fingertip the
+  //  ray is aimed through, so a hover does not flicker on and off a target
+  //  it is plainly sitting on.
+  //
+  //  pickGraceMs covers what the shoulder anchor does not fully remove:
+  //  a pinch's rising edge with nothing picked that exact frame still
+  //  activates whatever this hand had hot within this many milliseconds --
+  //  butterflies only, never the two controls, which are fixed in place,
+  //  easier to hit anyway, and where a wrong guess (an accidental
+  //  accept/delete) costs more than a missed letter.
+  shoulderDown: 0.20,       // metres, estimated shoulder below the headset
+  shoulderOut:  0.18,       // metres, estimated shoulder out from centre
   aimSmoothTau: 0.07,       // seconds, EMA time constant on the hand ray
   pickGraceMs:  180,        // ms, how long a hover is "rescued" after loss
 
