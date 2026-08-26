@@ -38,6 +38,32 @@ Nothing about the composition, typography, capture flow, or controls changed. Th
 the one build in the series that most needs its own on-headset pass — see "Verified"
 below.
 
+### Round 2 — off on-headset feedback on the pass above
+
+Three things remained: neighbouring butterflies (~0.6m apart) still got confused for
+each other, the two controls still got triggered by a reach that only grazed them, and
+the pinch itself sometimes didn't register. Full detail in `CLAUDE.md`'s "Selection,
+round 2"; in short, still just `interact.js`/`keyboard.js`/`config.js`:
+
+- **Hover lock** (`interact.js:pickFlySticky()`) — a hand's hovered butterfly now
+  resists losing the hover to a marginally-better neighbour unless the challenger
+  clearly wins or keeps winning for a quarter second; a target the ray plainly left
+  still releases instantly. Caught and fixed a real bug here via synthetic testing: a
+  stale challenger id let `sustained` fire on a single frame instead of after
+  `hoverLockMs` (see `CLAUDE.md`).
+- **The controls are harder to brush.** Their pick radius, not just the cone's slack,
+  was the dominant term and was already bigger than a typical butterfly's own — now
+  shrunk (`CFG.panelPickShrink`) independent of their visual size, plus their own
+  tighter ray/touch slack (`panelPickBase`/`panelTouchRadius`). Total tolerance:
+  ≈0.35–0.45m → ≈0.19–0.22m, now tighter than a typical butterfly's.
+- **The pinch is smoothed** (`p.smPinch`, `CFG.pinchSmoothTau`) and `pinchOn`/`pinchOff`
+  both widened by 5mm (0.028→0.033 / 0.045→0.050, gap unchanged) — Quest hand tracking
+  is noisiest right as fingers occlude each other, exactly at a real pinch.
+- **The slow field is sharper**: `slowHot` 0.30→0.25, `slowRadius` 0.90→1.10, plus a
+  new `CFG.slowFalloffPow` biasing the falloff to stay close to the hot target and drop
+  more steeply near the edge, rather than flattening every neighbour toward the same
+  speed (which would make them easier, not harder, accidental targets).
+
 ## What this is
 
 v4 stripped back, and the controls given weight. **The interaction is unchanged** —
@@ -198,13 +224,27 @@ decoration on top of a target that never moves relative to the thing you are aim
 | the wing knockout | the letter is a hole in the alpha, not a mark on it — 5,195 lit pixels against 27,573 dark |
 | the letter's flight | leaves the butterfly on capture, lands in its slot |
 | the blown-up letter | shows the right character on highlight, fades out when tracking drops |
+| hover lock, margin case | two synthetic overlapping targets, symmetric-tie noise: 0 flickers across 20 frames (was 3 switches before a challenge-id-reset bug fix) |
+| hover lock, sustained-challenger case | a consistent marginal winner takes over at ~267ms — within one frame of `hoverLockMs` (250ms) |
+| hover lock, clean-exit case | ray swung fully off a locked target returns nothing that same tick, then re-acquires a fresh target with no lag |
+| panel tightening, ray | a synthetic offset between the old (0.45m) and new (0.219m) control tolerance correctly misses; dead-on aim still hits |
+| panel tightening, touch | 0.12m (between old 0.16m and new 0.08m) misses; 0.05m still hits |
+| pinch smoothing | a raw sequence that never crosses the old 0.028 threshold crosses the new smoothed 0.033 as intended; a single wild outlier sample produces no spurious closed edge |
+| slow-field falloff | live values at 0/0.3/0.6/1.0 of `slowRadius` match the `slowFalloffPow` formula exactly; hot target settles at `slowHot` |
+| desktop capture/accept flow | unaffected by any round-2 change — CAT typed and accepted end to end on a clean load |
 
-**v6's flow was run on a physical Quest and confirmed working.** v6.1's specific changes
-— the ray smoothing, the grace window, the line, and the slow field — have not yet had
-their own on-headset pass, and this build is the one where that matters most (see the
-plan's on-headset checklist: flick between distant butterflies for added lag, pinch at
-natural speed on the motivating scenario, watch the line and the flash, reach across the
-controls, two-handed use, reach into a dense cluster).
+**v6's flow was run on a physical Quest and confirmed working.** Round 1 of v6.1 (the
+shoulder ray, aim smoothing, grace window, line, slow field) got an on-headset pass and
+prompted round 2 above. Round 2 itself is verified only synthetically so far (see the
+rows above — the same fabricated-`rig`-state technique used throughout this file) and
+still needs its own on-headset pass: aim steadily at a genuinely close pair and confirm
+tremor no longer flickers the highlight while a deliberate swing still takes over
+promptly; reach for a butterfly whose path crosses near a control and confirm it no
+longer steals the pick; pinch at natural speed, several reps both hands, checking
+specifically for the "doesn't register" failure and that release still feels crisp;
+confirm the hot target reads noticeably calmer with a visibly graded (not uniform) falloff
+to its neighbours; two-handed reach into a dense cluster, confirming each hand's lock
+state stays independent.
 
 **Scene weight: 268 objects** — 144 meshes, 110 sprites, 14 lines, and `alphaTest` materials
 do not batch, so that is roughly the draw call count. (v4 was 225. Deleting the scatter

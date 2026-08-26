@@ -76,8 +76,8 @@ var CFG = {
   pickAngle:   0.055,       // radians the cone opens by, further out
   touchRadius: 0.16,        // fingertip this close beats any ray pick
   rayMax:      8.0,
-  pinchOn:     0.028,       // metres, thumb tip to index tip: pinch closes
-  pinchOff:    0.045,       // and opens again (hysteresis, not one value)
+  pinchOn:     0.033,       // metres, thumb tip to index tip: pinch closes
+  pinchOff:    0.050,       // and opens again (hysteresis, not one value)
 
   //  v6.1: the cone above is already tuned right up against a hard ceiling
   //  (neighbours sit ~0.6 m apart; slack past a quarter of that turns them
@@ -111,6 +111,52 @@ var CFG = {
   aimSmoothTau: 0.07,       // seconds, EMA time constant on the hand ray
   pickGraceMs:  180,        // ms, how long a hover is "rescued" after loss
 
+  //  v6.1 round 2 -- the shoulder ray above cut most of the pinch-commit
+  //  perturbation, but three things remained on-headset: neighbouring
+  //  butterflies (~0.6 m apart, so their cones genuinely overlap) still
+  //  got confused for each other, the two controls still got triggered by
+  //  a reach that only grazed them, and the pinch itself sometimes never
+  //  registered at all. None of this is fixed by shrinking the shared
+  //  cone further -- that ceiling is exactly the one described above --
+  //  so this round adds MEMORY (hover doesn't flicker between two
+  //  candidates that are both technically in range) and shrinks two
+  //  SPECIFIC targets (the controls) rather than the shared budget.
+  //
+  //  hoverLockMargin/hoverLockMs: once a hand's pointer has a hovered
+  //  butterfly, a challenger only steals it by clearly beating its score
+  //  (hoverLockMargin, a fraction of the tolerance width) or by being the
+  //  SAME better challenger for hoverLockMs running. A target the ray has
+  //  plainly left (score >= 1) releases with no delay either way -- the
+  //  lock only ever resists switching inside a genuine overlap band.
+  //  interact.js:pickFlySticky().
+  hoverLockMargin: 0.22,    // score units (0..1), see pickFlySticky()
+  hoverLockMs:      250,    // ms a sustained challenger takes to win anyway
+
+  //  panelPickShrink/panelPickBase/panelTouchRadius: the controls' own
+  //  RADIUS (their visual size), not just the cone's slack, turned out to
+  //  be the dominant term in their tolerance -- both blobs are already
+  //  bigger than a typical butterfly's own pick radius. panelPickShrink
+  //  scales the accept/delete PICK radius down (keyboard.js:targets(),
+  //  visual size untouched); panelPickBase/panelTouchRadius are the
+  //  controls-only versions of pickBase/touchRadius above. Together a
+  //  control's total tolerance drops below a typical butterfly's, so "the
+  //  controls win" only fires when one is genuinely, deliberately aimed
+  //  at -- not softened, just evaluated against a smaller target.
+  panelPickShrink:  0.55,   // multiplies a control's own pick radius
+  panelPickBase:    0.06,   // metres, controls-only version of pickBase
+  panelTouchRadius: 0.08,   // metres, controls-only version of touchRadius
+
+  //  pinchSmoothTau, and pinchOn/pinchOff above widened by 5mm each (was
+  //  0.028/0.045): rig.pinch (hands.js) is raw and unsmoothed, and Quest
+  //  hand tracking is noisiest right as fingers occlude each other --
+  //  exactly at a real pinch. Smoothing alone can't fix a signal that's
+  //  systematically a little wide right at occlusion, so it's paired with
+  //  widening pinchOn; the gap between the two thresholds (their
+  //  hysteresis) is kept the same width as before, only shifted.
+  //  pinchSmoothTau is about half aimSmoothTau -- long enough to bridge
+  //  one bad sample, short enough that activation still feels immediate.
+  pinchSmoothTau: 0.035,    // seconds, EMA time constant on rig.pinch
+
   // ---- feedback ----
   hiScale:     1.45,        // a highlighted butterfly grows to this
   captureTime: 0.55,        // seconds to fly into the hand
@@ -126,9 +172,21 @@ var CFG = {
   //  there. This also makes 1-2 above work better: a target that is barely
   //  moving while hot is far easier for a damped ray to stay locked onto,
   //  and far more forgiving of the pinch-commit perturbation.
-  slowHot:     0.30,        // time-scale for the butterfly directly hot
-  slowRadius:  0.90,        // metres, falloff for neighbours of a hot one
+  slowHot:     0.25,        // time-scale for the butterfly directly hot
+  slowRadius:  1.10,        // metres, falloff for neighbours of a hot one
   slowEase:    0.35,        // seconds, how gradually speed eases in/out
+
+  //  v6.1 round 2 -- slowHot/slowRadius retuned calmer and wider, plus
+  //  this new curve exponent, so the immediate neighbourhood's own flight
+  //  noise (a contributor to accidental hover-lock challenges) settles
+  //  down without flattening every nearby butterfly toward the hot one's
+  //  own speed. That would backfire: a near-stationary neighbour is an
+  //  EASIER accidental ray target than one still visibly drifting, so the
+  //  contrast between "the hot one" and "everything else nearby" has to
+  //  stay clear. Biases the falloff to stay close to slowHot near the
+  //  target and drop off more steeply near slowRadius's edge, instead of
+  //  smoothstep's roughly-linear middle -- see updateSlowField().
+  slowFalloffPow: 1.6,
 
   // ---- the UI, fixed in front of the visitor ----
   //  No panel, no box. The name is loose letters hanging in the air and

@@ -62,6 +62,32 @@
 //  touch whatever is actually picked instead of just gesturing toward
 //  it, and flashes briefly on a catch. All free reads of the same pick
 //  data, no new raycasts.
+//
+//  v6.1 ROUND 2 -- three things remained after the shoulder-ray pass:
+//
+//    NEIGHBOURS STILL GOT CONFUSED. Butterflies sit ~0.6m apart, so their
+//              cones genuinely overlap; a fresh best-score-wins pick each
+//              frame flickers between two overlapping candidates on
+//              ordinary joint noise. `pickFlySticky()` adds MEMORY --
+//              once a hand has a hovered butterfly, a challenger has to
+//              clearly beat it or keep winning for a while to steal it,
+//              but a target the ray plainly left releases instantly. Cone
+//              geometry itself is untouched (see config.js).
+//    THE CONTROLS GOT BRUSHED. Their own pick RADIUS, not just the cone's
+//              slack, was bigger than a typical butterfly's -- so "the
+//              controls win" kept firing on near-misses. `panelPickBase`/
+//              `panelTouchRadius` here and a radius shrink in
+//              `keyboard.js:targets()` bring a control's total tolerance
+//              below a butterfly's, so it only wins when genuinely aimed
+//              at. The priority RULE itself is untouched.
+//    THE PINCH DIDN'T ALWAYS REGISTER. `rig.pinch` is raw and unsmoothed,
+//              and Quest hand tracking is noisiest right as fingers
+//              occlude each other -- exactly at a real pinch. `smPinch`
+//              (EMA, same technique as `smAim`) plus widening
+//              `pinchOn`/`pinchOff` by the same 5mm (preserving the
+//              hysteresis gap) address the noise and the threshold fit
+//              together -- smoothing alone can't fix a signal that's
+//              systematically a little wide at occlusion.
 // ============================================================
 AFRAME.registerComponent('pointer-input', {
   init: function () {
@@ -69,10 +95,14 @@ AFRAME.registerComponent('pointer-input', {
     this.pointers = [
       { kind: 'hand', side: 'left',  closed: false, hover: null, at: new THREE.Vector3(),
         smAim: new THREE.Vector3(), smInit: false,
-        lastHotId: null, lastHotAt: -Infinity, flashT: 0 },
+        lastHotId: null, lastHotAt: -Infinity, flashT: 0,
+        lockId: null, lockChallengeId: null, lockChallengeAt: -Infinity,
+        smPinch: 0, pinchInit: false },
       { kind: 'hand', side: 'right', closed: false, hover: null, at: new THREE.Vector3(),
         smAim: new THREE.Vector3(), smInit: false,
-        lastHotId: null, lastHotAt: -Infinity, flashT: 0 },
+        lastHotId: null, lastHotAt: -Infinity, flashT: 0,
+        lockId: null, lockChallengeId: null, lockChallengeAt: -Infinity,
+        smPinch: 0, pinchInit: false },
       { kind: 'mouse',               click: false,  hover: null, at: new THREE.Vector3() }
     ];
 
@@ -147,12 +177,15 @@ AFRAME.registerComponent('pointer-input', {
     return this.kb;
   },
 
-  //  Nearest target to a fingertip, or null.
+  //  Nearest target to a fingertip, or null. v6.1 round 2: the controls
+  //  use their own, tighter radius -- see config.js:panelTouchRadius.
   pickTouch: function (targets, tip) {
     var best = null, bestD = Infinity;
     for (var i = 0; i < targets.length; i++) {
-      var d = tip.distanceTo(targets[i].pos);
-      if (d < CFG.touchRadius && d < bestD) { bestD = d; best = targets[i]; }
+      var tg = targets[i];
+      var r = tg.panel ? CFG.panelTouchRadius : CFG.touchRadius;
+      var d = tip.distanceTo(tg.pos);
+      if (d < r && d < bestD) { bestD = d; best = tg; }
     }
     return best;
   },
@@ -168,8 +201,15 @@ AFRAME.registerComponent('pointer-input', {
   //  Scored by how far off the axis the centre is RELATIVE to that
   //  tolerance, so a big slow butterfly does not out-compete a small one
   //  sitting right under the ray.
+  //
+  //  v6.1 round 2: the controls use their own, tighter slack
+  //  (`panelPickBase`) -- their own pick RADIUS is already shrunk in
+  //  `keyboard.js:targets()`, and this is the other half of that. Shared
+  //  `pickAngle` stays shared: its contribution at the controls' fixed
+  //  ~0.8m depth (~0.044m) was never the dominant term either way.
   pickRay: function (targets, origin, dir, panelOnly) {
     var best = null, bestScore = Infinity;
+    var base = panelOnly ? CFG.panelPickBase : CFG.pickBase;
     for (var i = 0; i < targets.length; i++) {
       var tg = targets[i];
       if (panelOnly && !tg.panel) { continue; }
@@ -179,7 +219,7 @@ AFRAME.registerComponent('pointer-input', {
       if (along < 0.05 || along > CFG.rayMax) { continue; }
       var perp2 = this._w.lengthSq() - along * along;
       if (perp2 < 0) { perp2 = 0; }
-      var tol = tg.radius + Math.max(CFG.pickBase, along * CFG.pickAngle);
+      var tol = tg.radius + Math.max(base, along * CFG.pickAngle);
       var score = Math.sqrt(perp2) / tol;
       if (score < 1 && score < bestScore) { bestScore = score; best = tg; }
     }
@@ -193,6 +233,79 @@ AFRAME.registerComponent('pointer-input', {
   pick: function (targets, origin, dir) {
     return this.pickRay(targets, origin, dir, true) ||
            this.pickRay(targets, origin, dir, false);
+  },
+
+  //  HOVER LOCK (v6.1 round 2, butterflies only, hands only). Resolves
+  //  ambiguity between two candidates that are BOTH inside their own cone
+  //  this frame -- which happens routinely at ~0.6m neighbour spacing --
+  //  by favouring whichever the pointer already had, unless a challenger
+  //  is either CLEARLY better (beats the lock's score by
+  //  `CFG.hoverLockMargin`) or has been the SAME challenger, consistently
+  //  better, for `CFG.hoverLockMs` running. A single wobble frame (the
+  //  pinch-commit curl, one noisy sample) is protected either way; a
+  //  sustained, deliberate re-aim onto a specific neighbour is not held
+  //  past that window even if it never quite clears the full margin.
+  //
+  //  A target the ray has plainly left (score >= 1) is skipped by the
+  //  loop below same as `pickRay` -- so `lockTarget` comes back null and
+  //  the lock releases with NO delay. The lock only ever resists
+  //  switching inside a genuine overlap band, never after a clean miss.
+  //
+  //  Deliberately a SEPARATE loop from `pickRay`, not a modification of
+  //  it: `pickRay` stays exactly what the panel path and the mouse's
+  //  `pick()` call, untouched and risk-free by construction.
+  pickFlySticky: function (targets, origin, dir, p, now) {
+    var best = null, bestScore = Infinity;
+    var lockScore = Infinity, lockTarget = null;
+    for (var i = 0; i < targets.length; i++) {
+      var tg = targets[i];
+      if (tg.panel) { continue; }
+      this._w.copy(tg.pos).sub(origin);
+      var along = this._w.dot(dir);
+      if (along < 0.05 || along > CFG.rayMax) { continue; }
+      var perp2 = this._w.lengthSq() - along * along;
+      if (perp2 < 0) { perp2 = 0; }
+      var tol = tg.radius + Math.max(CFG.pickBase, along * CFG.pickAngle);
+      var score = Math.sqrt(perp2) / tol;
+      if (score >= 1) { continue; }
+      if (score < bestScore) { bestScore = score; best = tg; }
+      if (p.lockId && tg.id === p.lockId) { lockScore = score; lockTarget = tg; }
+    }
+
+    //  A CHALLENGE ONLY MEANS ANYTHING WHILE IT IS ACTIVE. Whenever the
+    //  lock isn't currently being challenged -- no lock target at all, or
+    //  the lock is still winning outright -- `lockChallengeId` must be
+    //  cleared alongside `lockChallengeAt`, not just the timestamp. Left
+    //  stale, a later frame where that same id reappears as `best` sees
+    //  `lockChallengeId === best.id` already (so the timer-reset branch
+    //  below never fires) while `lockChallengeAt` is still the earlier
+    //  `-Infinity` -- and `now - (-Infinity)` is always >= hoverLockMs,
+    //  so `sustained` comes back true on a single fresh frame instead of
+    //  after a genuine hoverLockMs of consistently losing. (Found by
+    //  synthetic testing: a symmetric tie flickered every 5-7 frames
+    //  instead of holding, tracing straight back to this.)
+    if (!lockTarget) {
+      p.lockId = best ? best.id : null;
+      p.lockChallengeId = null;
+      p.lockChallengeAt = -Infinity;
+      return best;
+    }
+    if (best === lockTarget) {
+      p.lockChallengeId = null;
+      p.lockChallengeAt = -Infinity;
+      return lockTarget;
+    }
+
+    if (p.lockChallengeId !== best.id) { p.lockChallengeId = best.id; p.lockChallengeAt = now; }
+    var sustained = (now - p.lockChallengeAt) >= CFG.hoverLockMs;
+    var clearWin = bestScore < lockScore - CFG.hoverLockMargin;
+    if (clearWin || sustained) {
+      p.lockId = best.id;
+      p.lockChallengeId = null;
+      p.lockChallengeAt = -Infinity;
+      return best;
+    }
+    return lockTarget;
   },
 
   //  v6.1 -- an estimated shoulder point for `side`, derived from the
@@ -250,6 +363,8 @@ AFRAME.registerComponent('pointer-input', {
           if (line) { line.visible = false; }
           p.hover = null; p.closed = false; p.smInit = false;
           p.lastHotId = null; p.flashT = 0;
+          p.lockId = null; p.lockChallengeId = null; p.lockChallengeAt = -Infinity;
+          p.pinchInit = false;
           continue;
         }
         p.at.copy(rig.indexTip);              // capture point stays raw/exact
@@ -277,12 +392,32 @@ AFRAME.registerComponent('pointer-input', {
         else { this._o.copy(rig.indexKnuckle); }
         this._d.copy(p.smAim).sub(this._o).normalize();
 
-        // touch stays on the RAW fingertip; only the ray's aim is smoothed
-        picked = this.pickTouch(targets, rig.indexTip) ||
-                 this.pick(targets, this._o, this._d);
+        // touch stays on the RAW fingertip; only the ray's aim is smoothed.
+        // v6.1 round 2: the panel path (this.pickRay directly) and the
+        // butterfly path (pickFlySticky, with hover-lock memory) are kept
+        // as two separate calls rather than going through this.pick() --
+        // "the controls win" still checks the panel first unconditionally,
+        // but the fly pick needs the pointer's own lock state, which
+        // this.pick()'s signature has no room for.
+        var panelPick = this.pickRay(targets, this._o, this._d, true);
+        var flyPick = this.pickFlySticky(targets, this._o, this._d, p, time);
+        picked = this.pickTouch(targets, rig.indexTip) || panelPick || flyPick;
+
+        //  Pinch smoothing (v6.1 round 2): rig.pinch is raw, and Quest
+        //  hand tracking is noisiest right as fingers occlude each other
+        //  -- exactly at a real pinch. EMA it the same way smAim damps
+        //  the aim, just with a shorter time constant (pinchSmoothTau)
+        //  since activation should still feel immediate.
+        if (!p.pinchInit) {
+          p.smPinch = rig.pinch;
+          p.pinchInit = true;
+        } else {
+          var ap = 1 - Math.exp(-dt / CFG.pinchSmoothTau);
+          p.smPinch += (rig.pinch - p.smPinch) * ap;
+        }
 
         // hysteresis: closes at pinchOn, opens again only past pinchOff
-        closed = p.closed ? (rig.pinch < CFG.pinchOff) : (rig.pinch < CFG.pinchOn);
+        closed = p.closed ? (p.smPinch < CFG.pinchOff) : (p.smPinch < CFG.pinchOn);
 
         if (picked) { p.lastHotId = picked.id; p.lastHotAt = time; }
 

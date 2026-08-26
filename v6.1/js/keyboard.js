@@ -383,7 +383,13 @@ AFRAME.registerComponent('butterfly-keyboard', {
     for (var j = 0; j < this.buttons.length; j++) {
       var b = this.buttons[j];
       if (!this.typed.length) { continue; }
-      out.push({ id: b.id, pos: b.pos, radius: b.radius, panel: true });
+      //  v6.1 round 2: a SMALLER pick radius than the visual blob. The
+      //  full b.radius (still used for drift-following, see buildPanel())
+      //  is already bigger than a typical butterfly's own pick radius, so
+      //  "the controls win" kept firing on reaches that only grazed a
+      //  control. CFG.panelPickShrink decouples "how big it looks" from
+      //  "how big its hitbox is" -- purely a picking-purpose number.
+      out.push({ id: b.id, pos: b.pos, radius: b.radius * CFG.panelPickShrink, panel: true });
     }
     return out;
   },
@@ -514,7 +520,13 @@ AFRAME.registerComponent('butterfly-keyboard', {
             var d = k.pos.distanceTo(hotPos[j]);
             if (d < nearest) { nearest = d; }
           }
-          target = CFG.slowHot + (1 - CFG.slowHot) * smoothstep(nearest / CFG.slowRadius);
+          //  v6.1 round 2: slowFalloffPow biases this toward staying
+          //  close to slowHot near the target and dropping off more
+          //  steeply near the edge, instead of smoothstep's roughly-
+          //  linear middle -- see config.js for why (contrast between
+          //  "the hot one" and its neighbours has to stay legible).
+          target = CFG.slowHot + (1 - CFG.slowHot) *
+                   smoothstep(Math.pow(nearest / CFG.slowRadius, CFG.slowFalloffPow));
         }
       }
       // EASED, not snapped -- an abrupt speed change is its own small

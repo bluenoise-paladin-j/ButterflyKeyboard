@@ -158,6 +158,68 @@ also has a selection side-effect worth knowing: a target barely moving while hot
 more forgiving of both the ray-jitter smoothing and the pinch's commit-frame perturbation
 above, so the three fixes reinforce each other.
 
+## Selection, round 2: memory instead of a wider cone
+
+After trying the pass above on-headset, three things remained: neighbouring butterflies
+(~0.6 m apart, cones that genuinely overlap at that spacing) still got confused for each
+other, the two controls still got triggered by a reach that only grazed them, and the
+pinch itself sometimes just didn't register. None of this is a job for the shared cone —
+that ceiling is exactly the one described above, and the "closest pair 0.17 m apart, 26/26
+self-pick" check in `VERSION.md` is what a further tightening would put at risk. So this
+round adds *memory over time* and shrinks two *specific* targets, rather than touching the
+shared budget.
+
+**Hover lock.** `interact.js:pickFlySticky()` — butterflies only, hands only, called
+alongside (not instead of) `pickRay`'s panel check, so "the controls win" and the mouse's
+plain `pick()` are both untouched. Once a hand has a hovered butterfly (`p.lockId`), a
+competing candidate only steals it by clearly beating its score (`CFG.hoverLockMargin`, a
+fraction of the tolerance width) or by being the *same* better challenger for
+`CFG.hoverLockMs` running. A target the ray has plainly left (`score >= 1`) releases with
+**no delay** either way — the lock only ever resists switching inside a genuine overlap
+band. This also stabilises the grace window from the pass above for free: `lastHotId` is
+set from whatever the lock returns, so it inherits the same steadiness.
+
+*A bug worth not rediscovering:* the two "still winning" branches reset
+`p.lockChallengeAt = -Infinity` but originally left `p.lockChallengeId` stale. A later
+frame where that same challenger id reappeared saw `lockChallengeId === best.id` already
+(so the timer never restarted) while `lockChallengeAt` was still `-Infinity` — and
+`now - (-Infinity)` is always `>= hoverLockMs`, so `sustained` came back true on a single
+fresh frame instead of after a genuine `hoverLockMs` of consistently losing. Caught by a
+synthetic symmetric-tie test that flickered every 5-7 frames instead of holding; the fix
+clears `lockChallengeId` alongside `lockChallengeAt` in every branch that isn't an active
+challenge.
+
+**The controls stop being "fallen onto."** Their own pick **radius**, not just the cone's
+slack, turned out to be the dominant term: the accept blob's pick radius was ≈0.29 m, the
+delete blob's ≈0.23 m — both already bigger than a typical butterfly's own (`0.20 * size`,
+0.09–0.21 m). `keyboard.js:targets()` now shrinks a control's *picking* radius by
+`CFG.panelPickShrink`, decoupled from its visual size (which is untouched, everywhere
+else); `interact.js:pickRay()`/`pickTouch()` also give panel targets their own, tighter
+slack (`CFG.panelPickBase`/`panelTouchRadius`). Combined, a control's total tolerance
+drops from ≈0.35–0.45 m to ≈0.19–0.22 m — tighter than a typical butterfly's, so "the
+controls win" (still an unconditional rule) only matters when one is genuinely aimed at.
+
+**Making the pinch itself register.** `rig.pinch` (hands.js, raw thumb-index distance) is
+noisiest exactly as fingers occlude each other from the headset's own cameras — i.e.
+exactly at a real pinch — and the absolute thresholds may not fit every hand. Two changes
+together: `p.smPinch` EMA-smooths it (`CFG.pinchSmoothTau`, about half `aimSmoothTau`
+since activation should still feel immediate — this only needs to bridge one bad sample,
+not damp sustained jitter), and `pinchOn`/`pinchOff` both widened by the same 5 mm
+(preserving the hysteresis gap, just shifting where it sits) — smoothing alone can't fix a
+signal that's systematically a little wide right at occlusion. The small added lag before
+`closed` flips is fine by the same logic the grace window already relies on: it looks
+*backward* from the pinch frame, so a few ms of *forward* delay before that frame arrives
+doesn't compound with it.
+
+**The slow field, sharpened.** `slowHot` lower (0.25) and `slowRadius` wider (1.10), plus
+a new `CFG.slowFalloffPow` biasing the falloff curve to stay close to `slowHot` near the
+target and drop off more steeply near the edge, instead of `smoothstep`'s roughly-linear
+middle (`keyboard.js:updateSlowField()`). Deliberately *not* flattening nearby neighbours
+down toward the hot target's own speed — a near-stationary neighbour is an *easier*
+accidental ray target than one still visibly drifting, so the contrast between "the hot
+one" and "everything else nearby" has to stay legible; the goal is calming the immediate
+neighbourhood's own flight noise, not equalising speeds.
+
 ## Flat, and how to keep it flat
 
 No blur, no bloom, no gradients, no soft glow anywhere. Every surface is one solid colour:
