@@ -253,6 +253,25 @@ var DNA = (function () {
     }
   };
 
+  //  ?reset=1 -- wipe the collection on load. For clearing test
+  //  butterflies, or resetting between exhibition days. Read once, not
+  //  persisted (reloading with the param still in the URL wipes again --
+  //  that is a deliberate action, so that is fine). Clears the mirror,
+  //  the in-memory cache, and the server file, and stops this load's
+  //  hydrate from bringing anything back.
+  if (typeof location !== 'undefined' && /[?&]reset=1(?:&|$)/.test(location.search)) {
+    cache = [];
+    dirtiedLocally = true;
+    mirror([]);
+    if (typeof fetch === 'function') {
+      fetch(COLLECTION, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: '{"sequences": []}'
+      }).catch(function () {});
+    }
+    console.log('[dna] ?reset=1 -- collection wiped');
+  }
+
   //  Pull the shared collection in as soon as the script loads. Async
   //  and fire-and-forget: collection.js replays the mirror on init and
   //  reconciles again when the 'dna:changed' above fires.

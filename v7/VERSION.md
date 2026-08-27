@@ -70,9 +70,18 @@ collection (newest first, capped) on load.
 - **Not the keyboard.** These are never in `keyboard.js:targets()`, so
   `interact.js` cannot see them — "cannot be selected or captured" falls out for
   free. They carry a **name**, not a letter.
+- **"Here's your butterfly."** A just-committed butterfly does not fly straight
+  into the swarm. It rises into a spot ~0.8 m in front of the visitor (inside the
+  keyboard's orbit, clearly the foreground), turns to face them, and hovers at a
+  held size (`CFG.presentSize`, whatever its orbit size will be) for
+  `CFG.presentHold` while the name settles under it — then peels off and flies
+  out to its orbit over `CFG.presentJoin`, growing or shrinking to its real size
+  on the way. Three states: `present` → `joining` → `orbit`. `CFG.acceptResetDelay`
+  (3600 ms) is set so the keyboard resets just as the butterfly starts leaving.
+  Replayed butterflies skip all this and spawn straight into `orbit`.
 - **Their own shell.** The 26 keys sit in a near, tuned band (1.0–2.4 m) that
   took three rounds of on-headset selection work. The collection flies further
-  out and taller (`CFG.col*`, ≈2.7–4.6 m) so the kaleidoscope reads as the room
+  out and taller (`CFG.col*`, ≈2.6–4.3 m) so the kaleidoscope reads as the room
   around you and the keyboard stays the near, actionable layer.
 - **Ported flight.** A simplified copy of `keyboard.js`'s `tickKey` / `pathAt` /
   `presentRoll` / `readSources` / `separate` — no capture states, no slow-field,
@@ -99,18 +108,24 @@ collection (newest first, capped) on load.
 
 - **`js/app.js`** — the whole file is now the seam it always described:
   `name → NameDNA.toValues → DNA.create`. Nothing else.
-- **`js/ui.js`** — `UI.nameTag(text, colour)`: one sprite, the whole name drawn
-  once, angular-scaled like the keys' letters, cached by text+colour, faded out
-  past `CFG.tagFadeFar` so the deep cloud is not a wall of text. A *colour*
-  canvas, so `srgb()`-tagged (unlike the wing alpha map).
-- **`js/config.js`** — `maxCollected`, the `col*` bands and helpers, the `tag*`
-  keys, and `acceptResetDelay`. Every new key has its literal default here, in
-  the same change as the code that reads it — the "config keys drift → silent
-  `NaN`" trap this build has hit before. `collection.js` also `console.error`s
-  any of its keys that come back undefined.
+- **`js/ui.js`** — `UI.nameTag(text, seed)`: the name drawn the way the keyboard
+  sets the caught name — **every letter its own small angle, rise and colour**
+  (nothing to do with the wing), the wonk deterministic off the butterfly's
+  stored id. One canvas, one sprite. It hugs the bottom of the butterfly's actual
+  silhouette (`CFG.tagCling`) at any size, and is **never faded with distance** —
+  the name is the record of a visitor and must stay legible. A *colour* canvas,
+  so `srgb()`-tagged (unlike the wing alpha map).
+- **`js/config.js`** — `maxCollected`, the `col*` bands and helpers, the `present*`
+  and `tag*` keys, and `acceptResetDelay`. Every new key has its literal default
+  here, in the same change as the code that reads it — the "config keys drift →
+  silent `NaN`" trap this build has hit before. `collection.js` also
+  `console.error`s any of its keys that come back undefined.
 - **`js/keyboard.js`** — one line: the bare `3200` reset delay is now
-  `CFG.acceptResetDelay` (default 3200, no change), so the "watch your butterfly
-  join" beat can be tuned. Nothing else.
+  `CFG.acceptResetDelay` (3600, so the keyboard resets just as the presented
+  butterfly leaves). Nothing else.
+- **`js/dna-store.js`** — `?reset=1` in the URL wipes the collection on load
+  (localStorage mirror, in-memory cache, and the server file). For clearing test
+  butterflies, or between exhibition days. Read once, not persisted.
 - **`tools/serve.py` / `serve-https.py`** — `do_POST` writes
   `dna_sequences.json` atomically (temp file + `os.replace`, under a lock);
   `do_GET` answers an empty collection rather than a 404 before the first
@@ -135,7 +150,10 @@ collection (newest first, capped) on load.
 | `NameDNA` determinism | `toValues('CAT') === toValues('cat')` (cleaned); `toValues('') === null` |
 | spread | ANNA / ANA / NANA / A / JAREDAMUSO all land far apart across all four values |
 | the seam | spell + accept → `DNA.create` → entry stored `{ id, name, values }` matching `toValues` |
-| a butterfly is made | `dna:committed` → `collection.js` flies one in, name beneath it, its own hue |
+| a butterfly is made | `dna:committed` → `collection.js` builds one, name beneath it, its own hue |
+| the present beat | every fresh butterfly runs `present` (~3 s, ~0.8 m ahead, facing you, held at `presentSize`) → `joining` (~2.8 s, flies out, grows/shrinks to its real size) → `orbit`; verified across many spawns |
+| no phantoms | scene holds exactly 26 keys + `collected.length` butterfly bodies, nothing else |
+| name always legible | tags never fade with distance; every collected butterfly has a visible tag; per-letter colours + jitter, seeded per id (stable across reloads) |
 | not pickable | no collection id ever appears in `keyboard.js:targets()` |
 | deterministic butterfly | two "JARED" entries → byte-identical values, one shared wing texture (`Wings.stats().unique` does not rise on the second) |
 | accumulation across reload | spell CAT, reload → CAT replays from storage, no fly-in; spell more → they pile up |
@@ -150,8 +168,12 @@ collection (newest first, capped) on load.
 | console | clean on a fresh load (the missing-file GET now answers 200, not 404) |
 
 **Not yet run on a physical Quest.** The flight is a port of v6.2's, verified on
-a Quest at v6; the collection's own orbit, the name-tag legibility at 3–5 m, and
-the framerate with a dozen extra butterflies are on-headset judgement calls.
+a Quest at v6. On-headset judgement calls, all `CFG` knobs: the present beat
+(`presentDist` / `presentSize` / `presentHold` — does the hero butterfly read
+against the busy keyboard, or does the keyboard need to dim during it?); the
+name-tag size and how close it clings (`tagAngular` / `tagCling` / `tagJitter`);
+the collection's orbit (`col*`); and the framerate with a dozen extra butterflies
+(`maxCollected`).
 
 ## Known gaps
 

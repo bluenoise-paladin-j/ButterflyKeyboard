@@ -560,9 +560,17 @@ butterflies:
   so `interact.js` structurally cannot pick or highlight them — the Outline's "cannot be
   selected or captured" needs no code of its own. They carry a **name** (`UI.nameTag`),
   not a letter.
+- **"Here's your butterfly."** A freshly committed butterfly runs a three-state beat
+  before it joins the swarm: `present` (rises into a spot ~0.8 m in front of the visitor,
+  turns to face them, hovers at a held size for `CFG.presentHold`) → `joining` (flies out
+  to its orbit over `CFG.presentJoin`, growing or shrinking to its real random size on the
+  way) → `orbit`. Only fresh commits do this; replayed butterflies spawn straight into
+  `orbit`. `present`/`joining` are scripted (not the ambient flight) and are skipped by
+  `separate()`. `CFG.acceptResetDelay` (3600 ms) resets the keyboard just as the butterfly
+  starts leaving.
 - **Their own shell.** The 26 keys sit at 1.0–2.4 m — a tuned band that took three rounds
   of on-headset selection work (see the selection sections above). The collection flies
-  further out and taller (`CFG.col*`, ≈2.7–4.6 m) so it reads as the kaleidoscope around
+  further out and taller (`CFG.col*`, ≈2.6–4.3 m) so it reads as the kaleidoscope around
   you and the keyboard stays the near, actionable layer. Full circle regardless of
   `CFG.arcSpan`.
 - **Flight is a port of `keyboard.js:tickKey`** — `pathAt`, the offset spring, flap-glide,
@@ -587,6 +595,14 @@ butterflies:
   predates the white sky and washes out on it. **Size is random**, not from the name:
   identity is carried by the wing silhouette and the hue, and a name that hashed to a tiny
   size would be a permanent bad outcome.
+- **The name tag** (`UI.nameTag`) is drawn the way the keyboard sets the caught name:
+  every letter its own small angle, rise and colour, the wonk deterministic off the stored
+  id (so a name keeps its layout across reloads, but two visitors with the same name
+  differ). One canvas, one sprite. It hugs the bottom of the butterfly's actual silhouette
+  (`c.modelBottom` from a one-time local bbox, × `CFG.tagCling`) at any size, and is
+  **never faded with distance** — the name is the visitor's record and has to stay legible
+  however far the butterfly wanders. (An earlier pass faded it past a few metres; that is
+  what made a drifting butterfly look "unlabelled".)
 - **The cap.** `CFG.maxCollected` (12) is how many *render*. Over it, the oldest leaves
   the *scene* only — its `DNA` record is kept, and it returns on reload or if the cap goes
   up. `Wings.MAX_UNIQUE` is 64 and the 26 keys hold 26 of those texture slots for good, so
@@ -620,6 +636,11 @@ the top (`HERE` referenced before assignment — a `NameError` at import); v7 de
 The server is **one writing station** — last-writer-wins on the whole blob, which is the
 Outline's model (one keyboard, one visitor at a time). Two headsets writing at once would
 need a merge.
+
+**`?reset=1`** in the URL wipes the collection on load — the localStorage mirror, the
+in-memory cache, and the server file — and stops that load's `hydrate()` bringing anything
+back. Read once, not persisted. For clearing test butterflies, or resetting between
+exhibition days on a headset where there is no console.
 
 ### traps this stage has to respect
 

@@ -338,67 +338,103 @@ var UI = (function () {
   }
 
   // ---- a visitor's name, hanging under their butterfly (v7) ----
-  //  The collection's butterflies carry a whole NAME, not a letter --
-  //  the spelled word on one sprite, in the butterfly's own colour. A
-  //  sprite for the same reason the keys' letters are: the butterflies
-  //  circle the visitor, so a mounted plane would be edge-on half the
-  //  time.
+  //  The collection's butterflies carry a whole NAME, not a letter. It
+  //  is drawn the way the caught name is set on the keyboard: every
+  //  letter its own small angle, its own rise off the baseline, and --
+  //  here -- its own colour, nothing to do with the wing. One canvas,
+  //  one sprite (a sprite for the same reason the keys' letters are:
+  //  the butterflies circle you, so a mounted plane would be edge-on).
   //
-  //  Cached by text+colour -- two visitors called ALEX share a canvas,
-  //  and a name scrolled off the cap and back on a reload does not
-  //  redraw. dispose() frees the MATERIAL only; the texture stays in
-  //  the cache for the next butterfly that needs it, like letterTex.
+  //  The wonk is DETERMINISTIC, seeded off the butterfly's stored id --
+  //  so a name keeps its exact layout across reloads, but two visitors
+  //  with the same name still get different arrangements.
+  //
+  //  Cached by text+seed. dispose() frees the MATERIAL only; the texture
+  //  stays cached for the next butterfly that needs it, like letterTex.
   var tagCache = {};
 
-  function nameTagTex(text, color) {
-    var key = text + '|' + color;
+  //  a tiny seeded generator, same shape as style.js's
+  function tagRng(seed) {
+    var s = ((seed | 0) * 9301 + 49297) % 233280;
+    return function () { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  }
+
+  function nameTagTex(text, seed) {
+    var key = text + '|' + seed;
     if (tagCache[key]) { return tagCache[key]; }
-    var fs = 44, pad = 10;
+    var r = tagRng(seed + 7);
+    var j = CFG.tagJitter;
+    var fs = 40;
+
+    var glyph = [], i;
+    for (i = 0; i < text.length; i++) {
+      glyph.push({
+        ch: text[i],
+        rot: (r() - 0.5) * 1.0 * j,          // radians, in the plane of the tag
+        rise: (r() - 0.5) * 0.85 * j,        // fraction of the cap height
+        squash: 0.92 + r() * 0.26,           // a little uneven, like hand-set type
+        hue: Math.floor(r() * 360)
+      });
+    }
+
     var probe = document.createElement('canvas').getContext('2d');
-    probe.font = '500 ' + fs + 'px ' + FONT;
+    probe.font = '600 ' + fs + 'px ' + FONT;
+    var adv = [], total = 0;
+    for (i = 0; i < glyph.length; i++) {
+      adv.push(probe.measureText(glyph[i].ch).width * 0.9 + 1);   // tight tracking
+      total += adv[i];
+    }
+    var pad = fs;                            // room for the rotation + rise to spill into
     var c = document.createElement('canvas');
-    c.width = Math.max(2, Math.ceil(probe.measureText(text || ' ').width) + pad * 2);
-    c.height = fs + pad * 2;
+    c.width = Math.max(2, Math.ceil(total + pad * 2));
+    c.height = Math.max(2, Math.ceil(fs + pad * 2));
     var x = c.getContext('2d');
-    x.font = '500 ' + fs + 'px ' + FONT;
+    x.font = '600 ' + fs + 'px ' + FONT;
     x.textAlign = 'center';
     x.textBaseline = 'middle';
-    x.fillStyle = color;
-    x.fillText(text || '', c.width / 2, c.height / 2 + 2);
+    var cx = pad, midY = c.height / 2;
+    for (i = 0; i < glyph.length; i++) {
+      var g = glyph[i];
+      x.save();
+      x.translate(cx + adv[i] / 2, midY + g.rise * fs);
+      x.rotate(g.rot);
+      x.scale(1, g.squash);
+      x.fillStyle = 'hsl(' + g.hue + ', 85%, 44%)';   // dark enough to read on white
+      x.fillText(g.ch, 0, 0);
+      x.restore();
+      cx += adv[i];
+    }
+
     var t = new THREE.CanvasTexture(c);
-    t.generateMipmaps = false;                 // one line of type mushes in the low levels
+    t.generateMipmaps = false;               // small type mushes in the low mip levels
     t.minFilter = THREE.LinearFilter;
     t.magFilter = THREE.LinearFilter;
-    srgb(t);                                    // a COLOUR canvas -- unlike the wing alphaMap
+    srgb(t);                                 // a COLOUR canvas -- unlike the wing alphaMap
     tagCache[key] = { tex: t, aspect: c.width / c.height };
     return tagCache[key];
   }
 
-  //  -> { sprite, place(camPos, worldPos, size, alpha), dispose() }.
-  //  `place` sets the ANGULAR size (a far name stays as readable as a
-  //  near one, clamped both ends), hangs it just below the body, and
-  //  fades it right out past CFG.tagFadeFar so the deep cloud is not a
-  //  wall of text. The caller parents the sprite to an anchor that
-  //  tracks the butterfly's position.
-  function nameTag(text, color) {
-    var rec = nameTagTex(text, color);
+  //  -> { sprite, place(camPos, worldPos, dropY, alpha), dispose() }.
+  //  `dropY` is where the top of the name should sit relative to the
+  //  anchor (negative, already scaled and clung -- collection.js works
+  //  it out from the butterfly's silhouette). `place` sets the ANGULAR
+  //  size (a far name stays as readable as a near one). It is NOT faded
+  //  with distance -- the name is the record of a visitor and should
+  //  stay legible however far the butterfly wanders.
+  function nameTag(text, seed) {
+    var rec = nameTagTex(String(text || ''), seed | 0);
     var mat = new THREE.SpriteMaterial({
       map: rec.tex, transparent: true, opacity: 0, depthWrite: false
     });
     var sp = new THREE.Sprite(mat);
     return {
       sprite: sp,
-      place: function (camPos, worldPos, size, alpha) {
+      place: function (camPos, worldPos, dropY, alpha) {
         var dist = camPos.distanceTo(worldPos);
         var h = Math.max(CFG.tagMin, Math.min(CFG.tagMax, dist * CFG.tagAngular));
         sp.scale.set(h * rec.aspect, h, 1);
-        sp.position.set(0, -(0.40 * size + h * 0.7), 0);   // clear of the body, below it
-        var fade = 1;
-        if (dist > CFG.tagFadeNear) {
-          fade = 1 - (dist - CFG.tagFadeNear) / (CFG.tagFadeFar - CFG.tagFadeNear);
-          fade = Math.max(0, Math.min(1, fade));
-        }
-        mat.opacity = 0.92 * (alpha == null ? 1 : alpha) * fade * (CFG.tagShow ? 1 : 0);
+        sp.position.set(0, dropY - h * 0.45, 0);   // `dropY` already accounts for tagCling
+        mat.opacity = 0.95 * (alpha == null ? 1 : alpha) * (CFG.tagShow ? 1 : 0);
         sp.visible = mat.opacity > 0.01;
       },
       dispose: function () { mat.dispose(); }             // texture stays cached

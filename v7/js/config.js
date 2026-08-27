@@ -273,10 +273,10 @@ var CFG = {
 
   //  v7 -- how long the caught name stays up after accept before the
   //  keyboard resets for the next visitor. Was a bare 3200 literal in
-  //  keyboard.js:accept(); pulled in here so the "watch your butterfly
-  //  join the kaleidoscope" beat can be tuned. The collection's fly-in
-  //  is timed to land about a second inside this.
-  acceptResetDelay: 3200,   // ms
+  //  keyboard.js:accept(); pulled in here so it can sit just after the
+  //  presented butterfly starts flying off to join the kaleidoscope
+  //  (presentArrive + presentHold, below).
+  acceptResetDelay: 3600,   // ms
 
   // ---- the collection (v7) ----
   //  The butterflies grown from visitors' names. NOT the keyboard: they
@@ -289,19 +289,33 @@ var CFG = {
                             //  Ceiling ~36: Wings.MAX_UNIQUE is 64 and the 26
                             //  keys hold 26 of those texture slots for good, so
                             //  past ~36 a live wing could be redrawn under it.
-  colRadMin:   2.7, colRadMax: 4.6,    // horizontal orbit, outside the keyboard's 2.4
-  colHgtMin:   0.8, colHgtMax: 3.2,    // a dome, taller than the keyboard band
+  colRadMin:   2.6, colRadMax: 4.3,    // horizontal orbit, outside the keyboard's 2.4
+  colHgtMin:   0.8, colHgtMax: 3.0,    // a dome, taller than the keyboard band
   colSizeMin:  0.6, colSizeRange: 0.9, // a touch bigger than the keys, to carry the distance
 
-  //  The name under each collected butterfly -- angular like the keys'
-  //  letters, a little smaller since it is a word, and faded right out
-  //  past tagFadeFar so the far cloud is not a wall of text.
+  //  "Here's your butterfly" -- a beat where a just-grown butterfly rises
+  //  into view in front of the visitor, facing them, before it flies out
+  //  to join the kaleidoscope. Only the butterfly just committed does
+  //  this; replayed ones spawn straight into their orbit.
+  presentDist:   0.80,      // metres in front of the visitor -- inside the keyboard's 1.0 orbit, clearly the foreground
+  presentRise:   0.06,      // metres above the eye line
+  presentSize:   0.78,      // held at a comfortable size here, whatever its orbit size will be
+  presentArrive: 0.7,       // seconds to rise into that spot
+  presentHold:   2.4,       // seconds it hovers there, facing you
+  presentJoin:   2.8,       // seconds to fly from there out to its orbit (growing/shrinking to its real size)
+
+  //  The name under each collected butterfly. Every letter its own small
+  //  angle, rise and colour (tagJitter scales the first two; 0 is a tidy
+  //  line). Sits just under the butterfly's actual silhouette (tagGap),
+  //  whatever its size. Angular-scaled so a far name stays as readable as
+  //  a near one -- never faded out; the name is the record of the visitor
+  //  and should always be legible.
   tagShow:     true,
-  tagAngular:  0.055,       // world height per metre of distance
-  tagMin:      0.040,
-  tagMax:      0.280,
-  tagFadeNear: 3.4,         // metres: full opacity within this
-  tagFadeFar:  5.6,         // metres: gone beyond this
+  tagAngular:  0.085,       // world height per metre of distance
+  tagMin:      0.050,
+  tagMax:      0.340,
+  tagCling:    0.70,        // 1 = at the geometry's bottom edge; less = tucked up into the body
+  tagJitter:   0.75,        // per-letter angle + rise; higher = wilder
 
   // ---- palette ----
   //  Fully saturated, always. The scene is white, so the butterflies carry
