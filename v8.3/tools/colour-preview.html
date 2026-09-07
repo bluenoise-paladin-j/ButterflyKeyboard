@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wing base-colour — preview (v8)</title>
+<style>
+  body { margin: 0; background: #f4f4f4; font: 12px/1.4 'Helvetica Neue', Arial, sans-serif; color: #222; }
+  header { position: sticky; top: 0; background: #fff; border-bottom: 1px solid #ccc; padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-start; }
+  header > div { display: flex; flex-direction: column; gap: 3px; }
+  header label { font-weight: 600; }
+  textarea { width: 260px; height: 60px; font: 11px monospace; }
+  input[type=range] { width: 150px; }
+  .val { font: 11px monospace; color: #666; }
+  #copy { font: 11px monospace; white-space: pre; background: #f0f0f0; padding: 6px 8px; border: 1px solid #ddd; }
+  #determ { font-weight: 600; padding: 4px 8px; border-radius: 3px; }
+  .pass { background: #d6f5d6; color: #1a6b1a; }
+  .fail { background: #f7d6d6; color: #9b1c1c; }
+  #grid { padding: 14px; display: flex; flex-wrap: wrap; gap: 16px; }
+  figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  canvas { image-rendering: pixelated; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+  figcaption { font: 11px monospace; text-align: center; color: #555; max-width: 160px; word-break: break-all; }
+</style>
+<!-- config.js defines CFG.panelPos = function(){ new THREE.Vector3(...) } but never CALLS it
+     at load, so THREE is not needed. WingColour.render() is pure Canvas2D. -->
+<script src="../js/config.js"></script>
+<script src="../js/name-dna.js"></script>
+<script src="../js/rolltable.js"></script>
+<script src="../js/wing-gen.js"></script>
+<script src="../js/wing-colour.js"></script>
+</head>
+<body>
+<header>
+  <div>
+    <label for="names">names / words (one per line)</label>
+    <textarea id="names">ANNA
+ANA
+NANA
+JARED
+MERIDIAN
+SERAPHINE
+IVY
+OBERON
+ZED
+KO</textarea>
+  </div>
+  <div>
+    <label for="mode">mode</label>
+    <select id="mode">
+      <option value="names">names</option>
+      <option value="sweep">seed sweep 0..47</option>
+    </select>
+  </div>
+  <div>
+    <label for="ramt">wingColRandAmt <span class="val" id="ramtV"></span></label>
+    <input type="range" id="ramt" min="0" max="1" step="0.01">
+  </div>
+  <div>
+    <label for="period">wingColPeriod <span class="val" id="periodV"></span></label>
+    <input type="range" id="period" min="0.25" max="8" step="0.05">
+  </div>
+  <div>
+    <label for="periodMax">wingColPeriodMax <span class="val" id="periodMaxV"></span></label>
+    <input type="range" id="periodMax" min="1" max="24" step="0.5">
+  </div>
+  <div>
+    <label for="ramp">wingColRampType</label>
+    <select id="ramp">
+      <option>random</option><option>horiz</option><option>vert</option>
+      <option>diag</option><option>diagalt</option><option>radial</option>
+      <option>circular</option><option>spiral</option><option>plaid</option>
+    </select>
+  </div>
+  <div>
+    <label for="harm">wingColHarmony</label>
+    <select id="harm">
+      <option>random</option><option>complement</option><option>triad</option>
+      <option>split</option><option>analog</option>
+    </select>
+  </div>
+  <div>
+    <label><input type="checkbox" id="mask"> composite against the wing silhouette</label>
+    <label><input type="checkbox" id="big" checked> 2× scale</label>
+    <span id="determ"></span>
+  </div>
+  <div>
+    <label>paste into config.js</label>
+    <span id="copy"></span>
+  </div>
+</header>
+<div id="grid"></div>
+
+<script>
+(function () {
+  'use strict';
+  var W = WingColour.W, H = WingColour.H;
+  var el = function (id) { return document.getElementById(id); };
+  var grid = el('grid');
+
+  el('ramt').value      = CFG.wingColRandAmt;
+  el('period').value    = CFG.wingColPeriod;
+  el('periodMax').value = CFG.wingColPeriodMax;
+  el('ramp').value      = CFG.wingColRampType;
+  el('harm').value      = CFG.wingColHarmony;
+
+  function knobs() {
+    return {
+      ramt: +el('ramt').value, basep: +el('period').value,
+      basepMax: +el('periodMax').value, ramp: el('ramp').value,
+      harm: el('harm').value
+    };
+  }
+
+  //  a WingGen silhouette to composite against, so you see the real wing
+  var shapeCanvas = document.createElement('canvas');
+  shapeCanvas.width = W; shapeCanvas.height = H;
+  function silhouette(dials) {
+    WingGen.drawWing(shapeCanvas, dials, {});
+    return shapeCanvas;   // white-on-black
+  }
+
+  function cell(label, seed, hue, dials) {
+    var k = knobs();
+    var fig = document.createElement('figure');
+    var cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    WingColour.render(cv, seed, hue, k);
+
+    if (el('mask').checked && dials) {
+      //  keep colour only where the silhouette is white
+      var sh = silhouette(dials);
+      var cx = cv.getContext('2d');
+      cx.globalCompositeOperation = 'destination-in';
+      //  build an alpha version of the silhouette (white -> opaque)
+      var tmp = document.createElement('canvas'); tmp.width = W; tmp.height = H;
+      var td = tmp.getContext('2d');
+      td.drawImage(sh, 0, 0);
+      var im = td.getImageData(0, 0, W, H);
+      for (var i = 0; i < im.data.length; i += 4) { im.data[i + 3] = im.data[i]; }
+      td.putImageData(im, 0, 0);
+      cx.drawImage(tmp, 0, 0);
+      cx.globalCompositeOperation = 'source-over';
+    }
+
+    var scale = el('big').checked ? 2 : 1;
+    cv.style.width = (W * scale) + 'px';
+    cv.style.height = (H * scale) + 'px';
+    fig.appendChild(cv);
+    var cap = document.createElement('figcaption');
+    cap.textContent = label + '  seed ' + seed + '  hue ' + hue.toFixed(3);
+    fig.appendChild(cap);
+    return fig;
+  }
+
+  function render() {
+    var k = knobs();
+    el('ramtV').textContent = k.ramt.toFixed(2);
+    el('periodV').textContent = k.basep.toFixed(2);
+    el('periodMaxV').textContent = k.basepMax.toFixed(1);
+    el('copy').textContent =
+      "wingColRandAmt:  " + k.ramt + ",\n" +
+      "wingColPeriod:   " + k.basep + ",\n" +
+      "wingColPeriodMax: " + k.basepMax + ",\n" +
+      "wingColRampType: '" + k.ramp + "',\n" +
+      "wingColHarmony:  '" + k.harm + "',";
+
+    grid.innerHTML = '';
+
+    if (el('mode').value === 'sweep') {
+      for (var s = 0; s < 48; s++) {
+        //  a bare seed sweep: pick an arbitrary hue spread across the wheel
+        grid.appendChild(cell('#' + s, s, (s * 0.61803398875) % 1, null));
+      }
+    } else {
+      var names = el('names').value.split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+      names.forEach(function (n) {
+        var v = NameDNA.toValues(n);
+        if (!v) { return; }
+        grid.appendChild(cell(NameDNA.clean(n), WingColour.seedFor(v), WingColour.nameHueFor(v), dialsFor(v)));
+      });
+    }
+
+    //  determinism cell: same name rendered twice must be byte-identical
+    var dv = NameDNA.toValues('ANNA');
+    var a = document.createElement('canvas'), b = document.createElement('canvas');
+    a.width = b.width = W; a.height = b.height = H;
+    WingColour.render(a, WingColour.seedFor(dv), WingColour.nameHueFor(dv), k);
+    WingColour.render(b, WingColour.seedFor(dv), WingColour.nameHueFor(dv), k);
+    var ok = a.toDataURL() === b.toDataURL();
+    var d = el('determ');
+    d.textContent = ok ? "determinism: PASS" : "determinism: FAIL";
+    d.className = ok ? 'pass' : 'fail';
+  }
+
+  //  DNA.dialsFor lives in dna-store.js which we don't load here; recreate
+  //  the -1..1 -> 0..1 wrap so the silhouette composite matches the scene.
+  function dialsFor(values) {
+    return values.map(function (x) {
+      var d = (Number(x) + 1) * 0.5;
+      d = ((d % 1) + 1) % 1;
+      return Number(d.toFixed(6));
+    });
+  }
+
+  ['names', 'mode', 'ramt', 'period', 'periodMax', 'ramp', 'harm', 'mask', 'big'].forEach(function (id) {
+    el(id).addEventListener('input', render);
+    el(id).addEventListener('change', render);
+  });
+  render();
+})();
+</script>
+</body>
+</html>
