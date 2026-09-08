@@ -112,6 +112,7 @@ comp._camPos.set(0, 1.6, 0);
 c.pos.set(0.20, 1.22, -0.36);                       // on a palm in front and to the right
 
 var n = new THREE.Vector3(0.15, 0.98, 0.1).normalize();   // a slightly tilted palm
+c.perchYaw = 0;                                          // head-on first, the baseline the turn is measured from
 var q = comp._restQuat(c, n, new THREE.Quaternion());
 var wingNormal = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
 var head = new THREE.Vector3(-1, 0, 0).applyQuaternion(q);   // the model's head is along local -X
@@ -127,6 +128,28 @@ print('  head . (visitor, raw) = ' + head.dot(toCam).toFixed(4) + '  (the palm i
 ok(wingNormal.dot(n) > 0.999, 'the wings lie in the palm plane, facing out of it');
 ok(head.dot(toCamFlat) > 0.999, 'the head is turned toward the visitor');
 ok(Math.abs(head.dot(n)) < 0.001, 'and the body axis lies IN the palm plane');
+
+print('\n== turned broadside, so the body reads ==');
+//  the body is ONE PLANE through the body axis: head-on, the visitor looks
+//  straight down its length and it disappears. c.perchYaw turns it across
+//  the view -- and must do so WITHOUT tipping the wings off the palm.
+[0, 60, 65, 70, -65].forEach(function (deg) {
+  c.perchYaw = deg * Math.PI / 180;
+  var qy = comp._restQuat(c, n, new THREE.Quaternion());
+  var wn = new THREE.Vector3(0, 1, 0).applyQuaternion(qy);
+  var hd = new THREE.Vector3(-1, 0, 0).applyQuaternion(qy);
+  var got = Math.acos(Math.max(-1, Math.min(1, hd.dot(toCamFlat)))) * 180 / Math.PI;
+  ok(Math.abs(got - Math.abs(deg)) < 0.01,
+     'perchYaw ' + deg + ' deg -> head is ' + got.toFixed(1) + ' deg off the visitor');
+  ok(wn.dot(n) > 0.9999, '   ...and the wings still lie flat in the palm plane');
+});
+//  and the two turns of the same size are genuinely opposite sides
+c.perchYaw = 65 * Math.PI / 180;
+var hL = new THREE.Vector3(-1, 0, 0).applyQuaternion(comp._restQuat(c, n, new THREE.Quaternion()));
+c.perchYaw = -65 * Math.PI / 180;
+var hR = new THREE.Vector3(-1, 0, 0).applyQuaternion(comp._restQuat(c, n, new THREE.Quaternion()));
+ok(hL.dot(hR) < 0.2, 'the two directions are opposite sides, not the same turn twice');
+c.perchYaw = 0;
 
 print('\n== the camera directly over the palm does not blow it up ==');
 comp._camPos.copy(c.pos).addScaledVector(n, 0.4);   // looking straight down the normal

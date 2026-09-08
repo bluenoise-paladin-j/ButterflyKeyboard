@@ -143,9 +143,10 @@ AFRAME.registerComponent('butterfly-collection', {
      'colPickRadius', 'colHiScale', 'summonMax',
      'summonSpeed', 'summonSpeedNear', 'summonEase',
      'summonSway', 'summonBob', 'summonSwayRate', 'summonArrive', 'summonGiveUp',
-     'hoverDist', 'hoverRise', 'hoverSize', 'hoverDwell', 'hoverDrift',
-     'hoverFlap', 'hoverFlapAmp', 'hoverFlapMean',
+     'hoverDist', 'hoverRise', 'hoverSize', 'hoverDwell',
+     'hoverSpanX', 'hoverSpanY', 'hoverSpanZ', 'hoverRate', 'hoverEase', 'hoverSettle',
      'perchSize', 'perchLift', 'perchFollow', 'perchDwell', 'perchSettle', 'perchRest',
+     'perchYawMin', 'perchYawMax',
      'perchFlutterEvery', 'perchFlutterFor', 'perchFlutterAmp',
      'leaveTime', 'leaveLift', 'leaveBank', 'leaveArc'].forEach(function (k) {
       if (CFG[k] === undefined) { console.error('[collection] CFG.' + k + ' is undefined'); }
@@ -306,6 +307,7 @@ AFRAME.registerComponent('butterfly-collection', {
       summonSide: null,               // the hand it is aiming at, kept while that hand keeps offering
       summonTo: new THREE.Vector3(),
       wingRest: 0,                    // eased dihedral while perched
+      perchYaw: 0,                    // drawn fresh on each landing -- see tickSummon
       flutterCd: rand(0.4, 2.0), flutterOn: 0,
       leaveFrom: new THREE.Vector3(), leaveInit: false, _leaveYaw: 0,
       flapEnv: 1, gliding: false, cycleT: 1 + Math.random() * 2,
@@ -1017,6 +1019,29 @@ AFRAME.registerComponent('butterfly-collection', {
     }
   },
 
+  //  THE ROOM IS OURS while a butterfly is coming to the visitor or is
+  //  with them: interact.js offers NOTHING else -- no letters, no accept,
+  //  no delete. Reaching for a butterfly flying at your face means putting
+  //  your hand through the whole keyboard, and every one of those letters
+  //  was a live target on the way through.
+  //
+  //  'leave' is deliberately NOT in this set. The lockout lifts the moment
+  //  the butterfly turns for home, so a visitor mid-name waits about
+  //  twelve seconds rather than fifteen, and the room comes back while
+  //  they are watching it go rather than after it has gone.
+  //
+  //  Note this leaves OUR OWN targets live throughout, so a pinch on a
+  //  different butterfly still swaps which one is coming (summonMax) --
+  //  a mis-pick stays correctable, and only the destructive controls and
+  //  the letters go away.
+  exclusive: function () {
+    for (var i = 0; i < this.collected.length; i++) {
+      var st = this.collected[i].state;
+      if (st === 'summon' || st === 'hover' || st === 'perch') { return true; }
+    }
+    return false;
+  },
+
   byTargetId: function (id) {
     for (var i = 0; i < this.collected.length; i++) {
       if ('col' + this.collected[i].id === id) { return this.collected[i]; }
@@ -1117,9 +1142,15 @@ AFRAME.registerComponent('butterfly-collection', {
   //  (local +Y is its normal -- see bfly-model.js) laid onto the palm
   //  plane, and the head turned to the visitor.
   //
-  //  Head TOWARD the visitor, so local +X points away from them: the
-  //  model is built with its head along local -X, which is also why
-  //  _flatQuat maps local +X to world DOWN and gets a head-up butterfly.
+  //  BROADSIDE, not head-on. The body is ONE PLANE through the body axis,
+  //  so with the head pointed at the visitor they are looking straight
+  //  down its length and the body vanishes -- two wings with nothing
+  //  joining them. Turned across the view by c.perchYaw (60-70 degrees,
+  //  drawn on landing, either way round) it is seen in profile instead,
+  //  with a wing to each side. The head still starts from "toward the
+  //  visitor" -- that is the baseline the turn is measured from, so
+  //  setting perchYawMin/Max to 0 gives the head-on pose back.
+  //
   //  Same makeBasis convention as _flatQuat -- (X, Y, X cross Y) -- so the
   //  two poses can be slerped between with no flip.
   _restQuat: function (c, normal, out) {
@@ -1137,6 +1168,9 @@ AFRAME.registerComponent('butterfly-collection', {
       if (ax.lengthSq() < 1e-6) { ax.set(1, 0, 0).addScaledVector(n, -n.x); }
     }
     ax.normalize();
+    //  ...and turned across the visitor's view, about the palm's own
+    //  normal so the wings stay in the palm plane however the hand tilts
+    if (c.perchYaw) { ax.applyAxisAngle(n, c.perchYaw); }
     var z = this._s1.crossVectors(ax, n);
     this._msc.makeBasis(ax, n, z);
     return out.setFromRotationMatrix(this._msc);
@@ -1203,7 +1237,15 @@ AFRAME.registerComponent('butterfly-collection', {
     //  remaining distance arrives on that frame instead of overshooting
     //  and turning back
     if (c.pos.distanceTo(c.summonTo) <= CFG.summonArrive) {
-      if (hand) { c.wingRest = -0.5; this.toState(c, 'perch'); }   // wings still up from the approach
+      if (hand) {
+        c.wingRest = -0.5;                        // wings still up from the approach
+        //  which way it sits, drawn fresh for this landing: 60-70 degrees
+        //  off head-on, and the side is drawn too -- both read as
+        //  broadside, and a fixed one made every landing identical
+        var yaw = rand(CFG.perchYawMin, CFG.perchYawMax) * Math.PI / 180;
+        c.perchYaw = (Math.random() < 0.5 ? -yaw : yaw);
+        this.toState(c, 'perch');
+      }
       else { this.toState(c, 'hover'); }
       return;
     }
@@ -1264,37 +1306,64 @@ AFRAME.registerComponent('butterfly-collection', {
   },
 
   // ---------- 3. HOVER -- no hand, so it waits in front of you ----------
-  //  It holds station where you are looking and drifts a little on the
-  //  same noise it flies its orbit with. A palm going up at any point
-  //  during this puts it straight back into 'summon', which then aims at
-  //  that palm -- so the interaction is discoverable by trying it while
-  //  the butterfly is right in front of your face.
+  //  IT FLIES. The first pass held it in the reveal's flat pinned-specimen
+  //  pose, wings spread square to the visitor, and it read as a diagram of
+  //  a butterfly rather than a butterfly -- the one thing in a room full of
+  //  flight that was not flying. That pose is the hero's and stays the
+  //  hero's (see holdPose/_flatQuat).
   //
-  //  Square to the visitor, but NOT the reveal's dead-flat pinned pose:
-  //  a slow roll about the body axis keeps it from reading as a poster.
-  //  That pose belongs to the hero's moment and should stay there.
+  //  So: the ordinary flight wingbeat, the body turned to follow its
+  //  heading, presentRoll keeping the wing readable at any height, and a
+  //  slow wander left-right / up-down / in-out about the held spot. It is
+  //  WAITING in front of you, not posing at you.
+  //
+  //  The wander is the fbm noise the butterfly already carries for its
+  //  orbit, read at its own frequencies x hoverRate, so no two wait the
+  //  same way and nothing about it is periodic. It is applied to the
+  //  TARGET, not to the position, and c.pos lags it by hoverEase -- which
+  //  both gives the movement weight and smooths the travel direction the
+  //  body turns to follow. Steering the position directly would leave the
+  //  heading chasing noise.
+  //
+  //  A palm going up at any point during this puts it straight back into
+  //  'summon', which then aims at that palm -- so the interaction is
+  //  discoverable by simply trying it while the butterfly is right in
+  //  front of your face.
   tickHover: function (c, t, dt) {
     var hand = this.offerFor(c);
     if (hand) { this.toState(c, 'summon'); return; }
     c.stateT += dt;
 
+    var r = CFG.hoverRate;
+    //  THE WANDER EASES IN. It arrives within summonArrive of the
+    //  un-wandered spot, but the noise at that instant is wherever the
+    //  butterfly's own clock has it -- up to the full span away -- so the
+    //  target jumped on the first frame of the hover and the lag chased it
+    //  at 1.0 m/s. That is a lunge toward the visitor's face, 0.6 m from
+    //  it. Ramped in, the peak over the whole wait is 0.3 m/s.
+    var w = smoothstep(Math.min(1, c.stateT / CFG.hoverSettle));
     this.hoverPoint(c, c.summonTo);
-    c.summonTo.x += CFG.hoverDrift * c.nWob(t * 0.30);
-    c.summonTo.y += CFG.hoverDrift * c.nHgt(t * 0.24);
-    c.summonTo.z += CFG.hoverDrift * c.nRad(t * 0.27);
-    c.pos.lerp(c.summonTo, Math.min(1, dt / 0.35));
+    c.summonTo.x += w * CFG.hoverSpanX * c.nWob(t * c.wobFreq * r);
+    c.summonTo.y += w * CFG.hoverSpanY * c.nHgt(t * c.hgtFreq * r);
+    c.summonTo.z += w * CFG.hoverSpanZ * c.nRad(t * c.radFreq * r);
+    c.pos.lerp(c.summonTo, Math.min(1, dt / CFG.hoverEase));
 
-    c.bm.flap(Math.sin(t * CFG.hoverFlap + c.flapPh) * CFG.hoverFlapAmp + CFG.hoverFlapMean);
-
-    c.group.rotation.set(0, 0, 0);
-    var q = this._flatQuat(c, this._qa);
-    this._qs.setFromAxisAngle(BODY_AXIS, 0.18 * Math.sin(t * 0.9 + c.flapPh));
-    q.multiply(this._qs);
-    c.bm.model.quaternion.slerp(q, Math.min(1, dt / 0.25));
+    //  the ordinary flight beat -- the same one the orbit flies
+    var fp = t * c.flapSpeed + c.flapPh;
+    c.bm.flap(Math.sin(fp) * c.flapAmp - 0.5);
 
     c.scale += (CFG.hoverSize / c.size - c.scale) * Math.min(1, dt / 0.6);
     c.alpha += (1 - c.alpha) * 0.1;
     this.render(c);
+    //  slower than the summon's turn (0.20 s): near-stationary flight has
+    //  a noisy heading, and a body snapping round to face every wander
+    //  reads as a twitch
+    this.faceTravel(c, dt, -0.5, 0, 0.45);
+    //  NO per-wingbeat body bob here, deliberately. In the orbit it is a
+    //  centimetre at 3-4 Hz seen from metres away; at 0.62 m from the face
+    //  the same movement is the fastest thing in the room and reads as
+    //  jitter -- which is exactly the complaint v2 cut it for. The wander
+    //  and the wingbeat carry the flight on their own.
     c.prev.copy(c.pos);
 
     if (c.stateT >= CFG.hoverDwell) { this.toLeave(c); }

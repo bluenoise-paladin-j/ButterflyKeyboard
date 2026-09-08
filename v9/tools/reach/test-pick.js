@@ -19,23 +19,35 @@ var KB = {
     return [
       { id: 'accept', pos: V(0.46, 1.16, -0.80), radius: 0.09, panel: true },
       { id: 'key7',   pos: V(0, 1.60, -1.60),    radius: 0.14, panel: false },
-      { id: 'key8',   pos: V(0.9, 1.60, -1.60),  radius: 0.14, panel: false }
+      { id: 'key8',   pos: V(0.9, 1.60, -1.60),  radius: 0.14, panel: false },
+      //  A REAL CASE, not a contrived one: this letter and col5 below are a
+      //  (key, collected butterfly) pair drawn straight out of a Monte
+      //  Carlo over the two shipped bands -- 26 letters in (r 1.0-2.4,
+      //  h 1.0-1.95) and a collected butterfly in (r 1.7-3.0, h 2.2-3.1).
+      //  The letter lands inside its own cone at score 0.77, a plain
+      //  near-miss, while the butterfly the ray is actually aimed at
+      //  scores 0.00 -- and under an absolute veto the letter took it.
+      { id: 'key9',   pos: V(0.514, 1.798, 1.178), radius: 0.208, panel: false }
     ];
   },
   setHot: function (h) { this.hot = h; },
-  activate: function (id) { this.fired = id; }
+  activate: function (id) { this.fired = id; },
+  exclusive: function () { return false; }
 };
 var COL = {
-  initialized: true, hot: null, fired: null,
+  initialized: true, hot: null, fired: null, locked: false,
   targets: function () {
     return [
       //  directly behind key7 from the origin, and dead on the axis
       { id: 'col3', pos: V(0, 1.60, -3.60), radius: 0.22, panel: false, layer: 'col' },
-      { id: 'col4', pos: V(-2.2, 1.90, -2.6), radius: 0.22, panel: false, layer: 'col' }
+      { id: 'col4', pos: V(-2.2, 1.90, -2.6), radius: 0.22, panel: false, layer: 'col' },
+      //  up on the new high dome, with key9 (above) grazing the line to it
+      { id: 'col5', pos: V(1.240, 2.352, 1.953), radius: 0.187, panel: false, layer: 'col' }
     ];
   },
   setHot: function (h) { this.hot = h; },
-  activate: function (id) { this.fired = id; }
+  activate: function (id) { this.fired = id; },
+  exclusive: function () { return this.locked; }
 };
 ELEMENTS['[butterfly-keyboard]'] = { components: { 'butterfly-keyboard': KB } };
 ELEMENTS['[butterfly-collection]'] = { components: { 'butterfly-collection': COL } };
@@ -48,14 +60,9 @@ pi.init();
 var provs = pi.providers();
 ok(provs.length === 2, 'both providers found');
 
-function all() {
-  var out = [], p = pi.providers();
-  for (var i = 0; i < p.length; i++) {
-    var ts = p[i].targets();
-    for (var j = 0; j < ts.length; j++) { ts[j].owner = p[i]; out.push(ts[j]); }
-  }
-  return out;
-}
+//  the component's OWN gathering, not a copy of it -- the exclusivity rule
+//  lives in there, and a reimplementation here would test the test
+function all() { return pi.gather(); }
 function shoot(from, to) {
   var d = new THREE.Vector3().copy(to).sub(from).normalize();
   return pi.pick(all(), from, d);
@@ -79,6 +86,45 @@ ok(hit && hit.id === 'accept', 'the controls still win, got ' + (hit && hit.id))
 
 hit = shoot(eye, V(3.0, 1.6, -1.0));
 ok(hit === null, 'nothing aimed at picks nothing');
+
+print('\n== the key veto is a MARGIN, not an absolute ==');
+var COL5 = V(1.240, 2.352, 1.953);
+//  first prove the letter really IS inside its own cone here -- otherwise
+//  this test passes for the wrong reason (nothing in the way at all), which
+//  is exactly how its first draft passed
+var d9 = new THREE.Vector3().copy(COL5).sub(eye).normalize();
+var k9 = pi.pickRay(all(), eye, d9, 'key');
+var c5 = pi.pickRay(all(), eye, d9, 'col');
+ok(k9 && k9.id === 'key9',
+   'the letter IS in range — an absolute veto would take this pick, got ' + (k9 && k9.id));
+ok(k9 && k9._score > 0.5 && k9._score < 1,
+   'and it is a plain near-miss, score ' + (k9 ? k9._score.toFixed(2) : '-'));
+ok(c5 && c5._score < 0.2, 'while the butterfly is aimed squarely at, score ' + (c5 ? c5._score.toFixed(2) : '-'));
+hit = shoot(eye, COL5);
+ok(hit && hit.id === 'col5',
+   'so the butterfly takes it, got ' + (hit && hit.id));
+//  and the margin is what did it, not luck
+ok(c5._score < k9._score - CFG.colBeatsKey,
+   'by the margin: ' + c5._score.toFixed(2) + ' vs ' + k9._score.toFixed(2) + ' - ' + CFG.colBeatsKey);
+
+hit = shoot(eye, V(0, 1.60, -1.60));
+ok(hit && hit.id === 'key7', 'a letter aimed AT still wins outright, got ' + (hit && hit.id));
+hit = shoot(eye, V(0, 1.60, -3.60));
+ok(hit && hit.id === 'key7', 'and still wins when it is directly in front of one, got ' + (hit && hit.id));
+
+print('\n== an exclusive provider takes the room ==');
+COL.locked = true;
+var t2 = all();
+ok(t2.length === 3 && t2.every(function (x) { return x.layer === 'col'; }),
+   'only the collection is offered: ' + t2.map(function (x) { return x.id; }).join(','));
+hit = shoot(eye, V(0.46, 1.16, -0.80));
+ok(hit === null || hit.id !== 'accept', 'accept is not pickable while locked, got ' + (hit && hit.id));
+hit = shoot(eye, V(0, 1.60, -1.60));
+ok(!hit || hit.id.indexOf('key') !== 0, 'nor any letter, got ' + (hit && hit.id));
+hit = shoot(eye, V(-2.2, 1.90, -2.6));
+ok(hit && hit.id === 'col4', 'but the kaleidoscope still is, got ' + (hit && hit.id));
+COL.locked = false;
+ok(all().length === 7, 'and everything comes back when it lifts');
 
 print('\n== the hover lock is keys-only ==');
 var p = { lockId: null, lockChallengeId: null, lockChallengeAt: -Infinity };

@@ -27,9 +27,17 @@ var CFG = {
   //  sits just outside the floating UI, so nothing flies through it.
   //  Sizes come down with the radius: a butterfly at 1 m at v2's size
   //  band fills the view.
+  //  v9 LOWERED hgtMax, 2.30 -> 1.95. The keyboard is now a LOW dome and
+  //  the collection is a high one above it (colHgt* below), so a visitor
+  //  looking up past the letters is looking at nothing but their own
+  //  butterflies. At 2.30 the top of the letter band reached 19.3 deg of
+  //  elevation at its nearest -- deep inside the collection's old span --
+  //  and every collected butterfly had letters in front of it from
+  //  somewhere. This is the only number in the keyboard's own flight that
+  //  v9 moves.
   sizeMin:   0.45, sizeRange: 0.60, sizeExp: 1.4,
   radMin:    1.00, radMax:    2.40,
-  hgtMin:    1.00, hgtMax:    2.30,
+  hgtMin:    1.00, hgtMax:    1.95,
 
   //  How far the noise pushes a butterfly off its nominal orbit. v2 cut
   //  these hard after "they wobble too much"; 1.0 is that calm baseline
@@ -308,8 +316,26 @@ var CFG = {
                             //  Ceiling ~36: Wings.MAX_UNIQUE is 64 and the 26
                             //  keys hold 26 of those texture slots for good, so
                             //  past ~36 a live wing could be redrawn under it.
-  colRadMin:   2.6, colRadMax: 4.3,    // horizontal orbit, outside the keyboard's 2.4
-  colHgtMin:   0.8, colHgtMax: 3.0,    // a dome, taller than the keyboard band
+  //  v9 MOVED THE WHOLE BAND: closer and much higher. It used to sit
+  //  entirely INSIDE the letters' angular span -- letters ran -31 to +35
+  //  degrees of elevation from the eye and the collection -17 to +28 -- so
+  //  from where the visitor stands every collected butterfly had letters in
+  //  front of it, and the pick could not get past them. Now the letters are
+  //  a low dome (hgtMax 1.95, ceiling 19.3 deg) and the collection a high
+  //  one at 19-42 deg. Closer and higher work TOGETHER: at 1.7 m out it
+  //  takes only 2.2 m of height to clear the letters, where at the old
+  //  2.6 m it would have taken 2.9.
+  //
+  //  The radius overlaps the keyboard's 1.0-2.4 on purpose -- the two are
+  //  separated in HEIGHT, not in plan, which is what puts them at different
+  //  ELEVATIONS rather than merely at different depths along the same ray.
+  //
+  //  Apparent size is checked, not assumed: at these distances a collected
+  //  butterfly spans 4-18 degrees of view against the keys' own 4-21, so
+  //  bringing them in does not make them the biggest thing in the room and
+  //  colSize* does not need to move.
+  colRadMin:   1.7, colRadMax: 3.0,    // horizontal orbit -- overlaps the keyboard's in plan, sits above it
+  colHgtMin:   2.2, colHgtMax: 3.1,    // a high dome, entirely above the letters. Top stays under a real 3 m ceiling, for passthrough
   colSizeMin:  0.6, colSizeRange: 0.9, // a touch bigger than the keys, to carry the distance
 
   //  "Here's your butterfly" -- the beat a just-grown butterfly runs
@@ -576,6 +602,31 @@ var CFG = {
   colHiScale:    1.20,      // how much a highlighted one grows (the keys use hiScale 1.45; these are bigger already)
   summonMax:     1,         // how many can be called over at once. Calling another sends the first one home
 
+  //  THE KEY LAYER'S VETO IS A MARGIN, NOT AN ABSOLUTE (v9, second pass).
+  //
+  //  The first pass made the ladder absolute: any key inside its own cone
+  //  beat any collected butterfly, however badly aimed the key was and
+  //  however precisely the butterfly was. That is unarguable when one is
+  //  directly behind the other -- but it is far too strong the rest of the
+  //  time, because A KEY'S CONE IS ENORMOUS IN ANGULAR TERMS. Measured:
+  //
+  //      key at 1.0 m, size 1.05  ->  0.37 m of tolerance = 20.3 deg
+  //      key at 1.5 m             ->                        13.9 deg
+  //      key at 2.4 m, size 0.45  ->                         5.9 deg
+  //
+  //  Raising the collection out of the letters' band (colHgt* above) buys
+  //  a geometric gap of a fraction of a degree at the very bottom of the
+  //  new band -- nothing against a cone 6 to 20 degrees wide. The bands
+  //  fix the common case; this fixes the rest.
+  //
+  //  So: the key still wins ties and near-ties, and a key actually aimed at
+  //  scores near 0 and cannot be beaten. A collected butterfly only takes
+  //  the pick when its score is better by this much -- i.e. when the
+  //  visitor is plainly aimed at IT and merely grazing the letter. Scores
+  //  are 0 (dead centre) to 1 (the edge of the cone), so 0.45 is most of
+  //  the width: the letter has to be a clear near-miss.
+  colBeatsKey: 0.45,        // score units (0..1). 0 restores the absolute veto; 1 lets the collection win almost anything
+
   // ---- it flies over ----
   //  SLOWLY, which was the brief. summonSpeed is a cruise, not a lerp:
   //  a lerp toward a moving target is fastest when it is furthest away
@@ -607,6 +658,18 @@ var CFG = {
   //  holds station in front of the visitor, wings working, and drifts a
   //  little so it reads as hovering rather than parked. It follows the
   //  head, so turning away does not lose it.
+  //  IT FLIES. The first pass held it in the reveal's dead-flat
+  //  pinned-specimen pose, wings spread square to the visitor, and it read
+  //  as a diagram of a butterfly rather than a butterfly. That pose belongs
+  //  to the hero's moment and now stays there. Here it flies: the ordinary
+  //  flight wingbeat, the body following its heading, presentRoll keeping
+  //  the wing readable, and a slow wander left-right / up-down about the
+  //  held spot -- it is WAITING in front of you, not posing.
+  //
+  //  The wander is the same fbm noise the butterfly already flies its orbit
+  //  with, at its own frequencies x hoverRate, so no two wait the same way
+  //  and none of it is periodic.
+  //
   //  ABOVE the eye line, not below it. The name field hangs at nameY
   //  -0.235 and the two controls at blobY -0.435, on a panel 0.80 m out;
   //  a butterfly holding station at 0.62 m and BELOW the eye line sits
@@ -617,10 +680,16 @@ var CFG = {
   hoverRise:   0.08,        // metres above the eye line, clear of the name and the controls
   hoverSize:   0.62,        // held at a comfortable size, whatever its orbit size is
   hoverDwell:  7.0,         // seconds it waits for a hand before it goes
-  hoverDrift:  0.055,       // metres it wanders around the held spot
-  hoverFlap:   7.5,         // radians/sec -- slower than flight (18-27), faster than the reveal's breath
-  hoverFlapAmp: 0.50,
-  hoverFlapMean: -0.35,     // wings held a little up, hovering
+  hoverSpanX:  0.26,        // metres it wanders side to side -- the widest axis, so the movement reads as flight
+  hoverSpanY:  0.15,        // metres up and down
+  hoverSpanZ:  0.11,        // metres toward and away from the visitor -- least, or it keeps changing size
+  //  Measured over the whole 7 s wait, averaged across six butterflies:
+  //  20 buys the widest swing (0.24 m side to side) at the same peak speed
+  //  as the slower rates (0.36 m/s) -- past about 26 the peak starts to
+  //  climb and it reads as darting rather than hovering, 0.6 m from a face.
+  hoverRate:   20,          // multiplies the butterfly's OWN orbit noise frequencies (0.010-0.045)
+  hoverEase:   0.22,        // seconds of lag onto the wandering point. Gives it weight, and smooths the heading the body turns to follow
+  hoverSettle: 0.7,         // seconds the wander ramps in over, as it arrives. Without it the target jumps on the first frame of the hover and it lunges at the visitor's face at 1.0 m/s
 
   // ---- a hand: it lands on it ----
   //  perchSize is the one number to move if it looks wrong in the
@@ -632,6 +701,18 @@ var CFG = {
   //  perchFollow is a LAG, not a snap: hands are never still, and a
   //  butterfly rigidly welded to a jittering palm looks like a decal. A
   //  50 ms lag is short enough that it never appears to slide off.
+  //  BROADSIDE, not head-on (v9, second pass). The body is a single plane
+  //  through the body axis, so pointing the head at the visitor puts them
+  //  looking straight down its length and the body disappears -- all you
+  //  see is two wings and nothing joining them. Turned across the view you
+  //  see it in profile, with a wing to each side.
+  //
+  //  Drawn fresh each time it lands, magnitude between the two, and the
+  //  SIDE it turns to is drawn too -- both directions read equally as
+  //  broadside, and a fixed one made every landing identical. To pin it,
+  //  set both to the same number.
+  perchYawMin: 60,          // DEGREES (not radians -- the rest of this file is radians; these two are not)
+  perchYawMax: 70,
   perchSize:   0.50,
   perchLift:   0.018,       // metres above the palm plane the body sits
   perchFollow: 0.05,        // seconds of lag following the hand

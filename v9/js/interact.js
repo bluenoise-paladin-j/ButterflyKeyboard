@@ -40,15 +40,32 @@
 //  thing that keeps the two swarms apart:
 //
 //      panel        the two controls. Fixed, inside everything else.
-//      key          the 26 letters, orbiting at 1.0-2.4 m
-//      collection   the kaleidoscope, orbiting at 2.6-4.3 m
+//      key          the 26 letters, on their low dome at 1.0-2.4 m
+//      collection   the kaleidoscope, on its high one above them
 //
-//  The collection is literally BEHIND the keyboard from the visitor's
-//  point of view, so a ray aimed through a letter passes on through the
-//  kaleidoscope. Scoring alone cannot separate those -- both are inside
-//  their own cone, and the far one can easily be nearer the axis -- so
-//  the near layer simply wins whenever it has anything at all. Cone
-//  geometry is untouched; the same numbers do the same job per layer.
+//  A ray aimed through a letter carries on into the kaleidoscope behind
+//  it, and scoring alone cannot separate those: both are inside their own
+//  cone, and the far one can easily be nearer the axis. So the near layer
+//  wins. Cone geometry is untouched; the same numbers do the same job per
+//  layer.
+//
+//  ...BUT THE KEY LAYER'S VETO IS A MARGIN, NOT AN ABSOLUTE (second pass).
+//  Making it absolute made the collection nearly unselectable, because a
+//  key's cone is enormous in angular terms -- 20 degrees wide for a big
+//  key at 1 m, against a geometric band gap of a fraction of a degree.
+//  Any letter drifting anywhere near the line vetoed a butterfly the
+//  visitor was aimed squarely at. A key now has to be within
+//  CFG.colBeatsKey of the butterfly's own score to keep the pick; a key
+//  actually aimed at scores near 0 and cannot be beaten, so spelling is
+//  untouched. See config.js:colBeatsKey for the measurements.
+//
+//  AN EXCLUSIVE PROVIDER (second pass). While a collected butterfly is on
+//  its way to the visitor, or with them, `butterfly-collection` reports
+//  itself exclusive and NOTHING ELSE IN THE ROOM IS PICKABLE -- not the
+//  letters, not accept, not delete. Reaching for a butterfly that is
+//  flying at your face means passing your hand through the whole keyboard,
+//  and every one of those letters was a live target. The lockout lifts the
+//  moment the butterfly turns for home.
 //
 //  v6.1 -- three things made real hand tracking harder to select with
 //  than it needed to be, and all three are fixed here rather than by
@@ -246,6 +263,35 @@ AFRAME.registerComponent('pointer-input', {
     return out;
   },
 
+  //  EVERYTHING PICKABLE THIS FRAME, as one flat list, each target tagged
+  //  with the provider that owns it. Both providers build fresh objects per
+  //  call, so writing `owner` onto them is safe and costs nothing.
+  //
+  //  A PROVIDER MAY CLAIM THE ROOM. `butterfly-collection` does, while a
+  //  butterfly is on its way to the visitor or is with them: reaching for
+  //  something flying at your face means putting your hand through the
+  //  whole keyboard, and the letters, accept and delete were all live
+  //  targets on the way through. When a provider is exclusive nothing else
+  //  is offered AT ALL -- so nothing else highlights either, and the room
+  //  visibly goes quiet rather than silently swallowing pinches.
+  //
+  //  Its own targets stay live, so a pinch on a different butterfly still
+  //  swaps which one is coming: only the letters and the two destructive
+  //  controls go away.
+  gather: function () {
+    var provs = this.providers();
+    var out = [], i, j, only = null;
+    for (i = 0; i < provs.length; i++) {
+      if (provs[i].exclusive && provs[i].exclusive()) { only = provs[i]; break; }
+    }
+    for (i = 0; i < provs.length; i++) {
+      if (only && provs[i] !== only) { continue; }
+      var ts = provs[i].targets();
+      for (j = 0; j < ts.length; j++) { ts[j].owner = provs[i]; out.push(ts[j]); }
+    }
+    return out;
+  },
+
   //  Which layer a target belongs to. The keyboard's own targets() is
   //  untouched by v9 -- it is the most-tuned file in the piece -- so its
   //  two kinds are still told apart by the `panel` flag it already sets,
@@ -304,6 +350,9 @@ AFRAME.registerComponent('pointer-input', {
       var score = Math.sqrt(perp2) / tol;
       if (score < 1 && score < bestScore) { bestScore = score; best = tg; }
     }
+    //  published for keyBeatsCol, which compares the two layers' winners
+    //  rather than measuring anything itself
+    if (best) { best._score = bestScore; }
     return best;
   },
 
@@ -311,14 +360,32 @@ AFRAME.registerComponent('pointer-input', {
   //  room and they sit inside the swarm's orbit, so a butterfly drifting
   //  across the green one must not steal the pick -- the visitor would be
   //  unable to finish until it moved on.
-  //  v9: three layers, nearest-in-the-room first. See the header --
-  //  the kaleidoscope sits BEHIND the keyboard, so this ordering is not a
-  //  preference, it is the only thing that stops a ray aimed at a letter
-  //  summoning whatever is orbiting behind it.
+  //  v9: three layers, nearest-in-the-room first. The controls win
+  //  outright; between the keys and the collection it is a MARGIN -- see
+  //  keyBeatsCol() and the header.
   pick: function (targets, origin, dir) {
-    return this.pickRay(targets, origin, dir, 'panel') ||
-           this.pickRay(targets, origin, dir, 'key') ||
-           this.pickRay(targets, origin, dir, 'col');
+    var panel = this.pickRay(targets, origin, dir, 'panel');
+    if (panel) { return panel; }
+    var key = this.pickRay(targets, origin, dir, 'key');
+    var col = this.pickRay(targets, origin, dir, 'col');
+    return this.keyBeatsCol(key, col) ? key : (col || key);
+  },
+
+  //  WHICH OF THE TWO SWARMS GETS THE PICK. The key keeps it unless the
+  //  collected butterfly is better aimed at by CFG.colBeatsKey, on the same
+  //  0..1 score both were measured with (0 = dead centre of the cone,
+  //  1 = its edge). `_score` is written by pickRay/pickFlySticky onto the
+  //  target it returns, so nothing is re-measured here.
+  //
+  //  The two properties this has to have, and does:
+  //    - a key the visitor is actually aimed at scores near 0, and no
+  //      score can be 0.45 lower than that. Spelling cannot break.
+  //    - a butterfly aimed squarely at (say 0.1) beats a letter merely
+  //      grazed (0.8), which is the whole complaint.
+  keyBeatsCol: function (key, col) {
+    if (!key) { return false; }
+    if (!col) { return true; }
+    return !(col._score < key._score - CFG.colBeatsKey);
   },
 
   //  HOVER LOCK (v6.1 round 2, butterflies only, hands only). Resolves
@@ -375,16 +442,19 @@ AFRAME.registerComponent('pointer-input', {
     //  after a genuine hoverLockMs of consistently losing. (Found by
     //  synthetic testing: a symmetric tie flickered every 5-7 frames
     //  instead of holding, tracing straight back to this.)
+    //  every exit publishes the winner's score for keyBeatsCol -- the
+    //  lock can hand back a target that was NOT this frame's best, so the
+    //  score has to come from whichever one is actually returned
     if (!lockTarget) {
       p.lockId = best ? best.id : null;
       p.lockChallengeId = null;
       p.lockChallengeAt = -Infinity;
-      return best;
+      return this._scored(best, bestScore);
     }
     if (best === lockTarget) {
       p.lockChallengeId = null;
       p.lockChallengeAt = -Infinity;
-      return lockTarget;
+      return this._scored(lockTarget, lockScore);
     }
 
     if (p.lockChallengeId !== best.id) { p.lockChallengeId = best.id; p.lockChallengeAt = now; }
@@ -394,10 +464,12 @@ AFRAME.registerComponent('pointer-input', {
       p.lockId = best.id;
       p.lockChallengeId = null;
       p.lockChallengeAt = -Infinity;
-      return best;
+      return this._scored(best, bestScore);
     }
-    return lockTarget;
+    return this._scored(lockTarget, lockScore);
   },
+
+  _scored: function (tg, score) { if (tg) { tg._score = score; } return tg; },
 
   //  v6.1 -- an estimated shoulder point for `side`, derived from the
   //  camera pose each tick (there is no tracked shoulder joint). Down by
@@ -432,15 +504,8 @@ AFRAME.registerComponent('pointer-input', {
   tick: function (time, delta) {
     var provs = this.providers();
     if (!provs.length) { return; }
-    //  One flat list, every target tagged with the provider that owns it
-    //  -- both providers build fresh objects per call, so writing `owner`
-    //  onto them is safe and costs nothing.
-    var targets = [], pi, ti;
-    for (pi = 0; pi < provs.length; pi++) {
-      var ts = provs[pi].targets();
-      for (ti = 0; ti < ts.length; ti++) { ts[ti].owner = provs[pi]; targets.push(ts[ti]); }
-    }
-    var hot = {};
+    var targets = this.gather();
+    var hot = {}, pi;
     var dt = Math.min(0.1, (delta || 16.7) / 1000);
     var haveCam = this.updateCamera();
 
@@ -540,7 +605,9 @@ AFRAME.registerComponent('pointer-input', {
         } else {
           p.touchCandId = null; p.touchCandSince = -Infinity;
         }
-        picked = touchPick || panelPick || flyPick || colPick;
+        //  same margin the mouse's pick() applies, on the sticky key pick
+        picked = touchPick || panelPick ||
+                 (this.keyBeatsCol(flyPick, colPick) ? flyPick : (colPick || flyPick));
 
         //  Pinch smoothing (v6.1 round 2): rig.pinch is raw, and Quest
         //  hand tracking is noisiest right as fingers occlude each other

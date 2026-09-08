@@ -6,12 +6,20 @@ them even in principle — and the piece simply stopped after the reveal. Now a 
 of them, the same pinch that catches a letter, calls it over: it leaves its orbit and flies
 to you, and **lands on your hand if you hold it out flat and palm-up**, hovers in front of
 your face for a few seconds if you do not, and goes the moment the palm turns, drops or
-closes. Four new states in `collection.js` (`summon` / `perch` / `hover` / `leave`), a palm
-posture published by `js/hands.js`, a three-layer pick ladder in `js/interact.js`, one new
-block in `js/config.js`, and `tools/reach/` — a headless harness, because the whole thing is
-a hand interaction and none of it can be eyeballed on a desktop. **`js/keyboard.js`, the
-generator and the colour are byte-identical to v8.7.** See "Calling a butterfly over" below
-and `VERSION.md`.
+closes. While it is coming, **nothing else in the room is pickable** — not the letters, not
+accept, not delete. Four new states in `collection.js` (`summon` / `perch` / `hover` /
+`leave`), a palm posture published by `js/hands.js`, a pick ladder in `js/interact.js`, one
+new block in `js/config.js`, and `tools/reach/` — a headless harness, because the whole thing
+is a hand interaction and none of it can be eyeballed on a desktop.
+
+**The two swarms also moved apart.** The collection used to fly *inside* the letters' angular
+band, so every collected butterfly had letters in front of it and 42% of attempts to pick one
+were vetoed by a letter that was merely nearby. The letters are now a low dome (`hgtMax` 2.30
+→ 1.95) and the collection a high one above it, closer in (2.6–4.3 m → 1.7–3.0 m out, 0.8–3.0
+→ 2.2–3.1 m up) — and the key layer's veto became a **margin** rather than an absolute.
+Together: **42% → 1.1%**, with nothing lost the other way. That one number in the keyboard's
+flight band is the only thing v9 changes outside its own four files; **the generator and the
+colour are byte-identical to v8.7.** See "Calling a butterfly over" below and `VERSION.md`.
 
 **v8.7 targets the wing SHAPE, not its colour.** The complaint was that some wings come
 out too small; the measurement was that the wing filled only **10–39% of its slice, median
@@ -460,6 +468,15 @@ and it comes to you.
 | the palm turns, drops or closes | **goes**, on that frame |
 | a palm goes up while it is hovering | goes to it |
 
+**Nothing else in the room is pickable while this is happening.** Reaching for a butterfly
+flying at your face means putting your hand through the whole keyboard, and every letter it
+passes was a live target — so `butterfly-collection` reports itself *exclusive* and
+`interact.js` offers nothing but its own butterflies. The lockout lifts the moment the
+butterfly turns for home, so a visitor mid-name waits about twelve seconds rather than
+fifteen, and the room comes back while they are still watching it go. Its own targets stay
+live throughout, so a pinch on a different butterfly still swaps which one is coming — only
+the letters and the two destructive controls go away.
+
 There is nothing to learn and nothing announced. The whole grammar is *hold your hand out
 and it will come to it*, which is what people already do around butterflies — and discovery
 is free, because the butterfly comes to your face whether or not you know about the hand,
@@ -497,6 +514,30 @@ and *below* the eye line sits directly in front of both. It could never steal th
 summoned butterfly is not a target — but it would cover them. The reveal solves the same
 problem the same way, with `presentRise`.
 
+**And it FLIES while it waits.** The first pass held it in the reveal's flat pinned-specimen
+pose, wings spread square to the visitor — which made it the one thing in a room full of
+flight that was not flying, and read as a diagram of a butterfly rather than a butterfly.
+That pose is the hero's and stays the hero's. Now it takes the ordinary flight wingbeat, the
+body turns to follow its heading, `presentRoll` keeps the wing readable, and it wanders about
+the held spot on the same fbm noise it flies its orbit with, at `hoverRate` × its own
+frequencies — so no two wait the same way and none of it is periodic. Measured in the running
+scene, the wing-to-camera aspect now travels **0.08 → 0.53**; the flat pose sat pinned at
+0.99 the entire time.
+
+Three details that are not obvious, each of which cost a measurement:
+
+- **The wander is applied to the TARGET, and the position lags it** by `hoverEase`. That both
+  gives the movement weight and smooths the travel direction the body turns to follow;
+  steering the position directly leaves the heading chasing noise.
+- **The wander has to ease in** (`hoverSettle`). It arrives within `summonArrive` of the
+  un-wandered spot, but the noise at that instant is wherever the butterfly's own clock has
+  it — up to a full span away — so the target jumped on the first frame of the hover and the
+  lag chased it at **1.0 m/s**. That is a lunge toward a face 0.6 m away. Ramped in, the peak
+  over the whole wait is 0.36 m/s.
+- **No per-wingbeat body bob here**, deliberately. In the orbit it is a centimetre at 3–4 Hz
+  seen from metres away; at 0.62 m it is the fastest thing in the room and reads as jitter —
+  which is exactly what v2 cut it for.
+
 **A resting butterfly is not a still one.** It opens and shuts its wings every couple of
 seconds, on an interval jittered per flutter so two never sync up, and follows the hand on a
 50 ms lag rather than being welded to it. Hands are never still; without both it reads as a
@@ -509,6 +550,15 @@ direction **projected into that plane** — not the raw one, which is typically 
 when you are looking down at your own hand. The degenerate case is real and not theoretical:
 a visitor looking straight down their own palm leaves no in-plane direction to point at, and
 `_restQuat` falls back to a world axis rather than producing a NaN pose.
+
+**…and then turned BROADSIDE.** Head-on, the visitor looks straight down the body's length —
+and the body is a single *plane* through that axis, so it vanishes and all that is left is
+two wings with nothing joining them. `c.perchYaw` turns it 60–70° across the view — drawn
+fresh on each landing, and the side is drawn too, because both directions read as broadside
+and a fixed one made every landing identical — so the body is seen in profile with a wing to
+each side. The turn is about the **palm's own normal**, which is what keeps the wings lying
+flat in the palm plane however the hand is tilted; `test-palm.js` checks that invariant at
+every angle it draws. Setting `perchYawMin`/`perchYawMax` to 0 gives the head-on pose back.
 
 ### The palm — `hands.js`
 
@@ -552,6 +602,40 @@ argument as `CFG.trackLossGraceMs` in `interact.js`, for the same reason: Quest 
 tracking drops a frame or two at a time, and a butterfly that took off every time it did
 would never stay on anyone's hand.
 
+### The two swarms are separated in HEIGHT
+
+The collection used to fly *inside* the letters' angular band. From the eye, letters spanned
+−31° to +35° of elevation and the collection −17° to +28° — so from where the visitor stands
+there was no direction in which a collected butterfly did not have letters in front of it.
+That is the geometry behind "they are hard to select through the bulk of letter butterflies",
+and no amount of pick tuning fixes it while it holds.
+
+| | v8.7 | v9 |
+|---|---|---|
+| letters | r 1.0–2.4 m, h 1.0–**2.30** | r 1.0–2.4 m, h 1.0–**1.95** |
+| collection | r **2.6–4.3** m, h **0.8–3.0** | r **1.7–3.0** m, h **2.2–3.1** |
+| elevation, letters | −31° … **+35°** | −31° … **+19°** |
+| elevation, collection | −17° … +28° | **+19°** … +42° |
+
+**Closer and higher work together.** At 1.7 m out it takes only 2.2 m of height to clear the
+letters; at the old 2.6 m it would have taken 2.9. So bringing the kaleidoscope *in* is what
+lets it be lifted clear without becoming a dome overhead — the look-up is 19–42°, not the
+36–52° it would have been at the old radius.
+
+Three things this had to be checked against, none of them assumed:
+
+- **The letters' ceiling is driven by one worst case** — a key at its highest *and* nearest
+  (1.95 m at 1.0 m out). That is the number the collection has to clear, not the average.
+- **Apparent size.** Bringing them in makes them bigger. At the new distances a collected
+  butterfly spans 4–18° of view against the keys' own 4–21°, so it is still not the biggest
+  thing in the room and `colSize*` did not need to move.
+- **A real ceiling.** In AR passthrough anything above about 3 m goes through one, so the top
+  of the band stops at 3.1.
+
+The radius bands now overlap in plan (1.7–3.0 against 1.0–2.4) and that is the point: the two
+swarms are separated in **height**, which puts them at different *elevations* rather than
+merely at different depths along the same ray.
+
 ### The pick ladder — `interact.js`
 
 `interact.js` now gathers targets from **providers** — the keyboard and the collection —
@@ -560,18 +644,53 @@ layers, tested in this order:
 
 ```
 panel        the two controls. Fixed, inside everything else.
-key          the 26 letters, orbiting at 1.0–2.4 m
-collection   the kaleidoscope, orbiting at 2.6–4.3 m
+key          the 26 letters, on their low dome at 1.0–2.4 m out, 1.0–1.95 m up
+collection   the kaleidoscope, on its high one at 1.7–3.0 m out, 2.2–3.1 m up
 ```
 
-**That ordering is not a preference, it is the only thing that keeps the two swarms
-apart.** The kaleidoscope is literally *behind* the keyboard from where the visitor stands,
-so a ray aimed through a letter carries on into it — and the far butterfly is often *nearer
-the ray's axis* than the letter is, because the score is off-axis distance relative to the
-cone's own width. No cone geometry can separate two things when one is directly behind the
-other. The near layer simply wins whenever it has anything at all. Checked against the
-running scene, aimed at each of the 26 live keys in turn: **26 of 26 still pick
-themselves.**
+The controls win outright. Between the other two the near layer wins, because the
+kaleidoscope is behind the keyboard from where the visitor stands and a ray aimed through a
+letter carries on into it — and the far butterfly is often *nearer the ray's axis* than the
+letter is, since the score is off-axis distance relative to the cone's own width. No cone
+geometry can separate two things when one is directly behind the other. Checked against the
+running scene, aimed at each of the 26 live keys in turn: **26 of 26 still pick themselves.**
+
+#### …but the key layer's veto is a MARGIN, not an absolute
+
+Making it absolute is what made the collection nearly unselectable, and the reason is that
+**a key's cone is enormous in angular terms**:
+
+| | tolerance | as an angle |
+|---|---|---|
+| a big key at 1.0 m | 0.37 m | **20.3°** |
+| a key at 1.5 m | 0.25–0.37 m | 9.5–13.9° |
+| a small key at 2.4 m | 0.25 m | 5.9° |
+
+Against that, moving the two bands apart buys a geometric gap of a *fraction of a degree* at
+the very bottom of the new collection band. So any letter drifting anywhere near the line
+vetoed a butterfly the visitor was aimed squarely at. Monte Carlo over both bands, 26 letters
+in the room, aiming dead-on at a collected butterfly:
+
+| | a letter vetoes the pick |
+|---|---|
+| v8.7's bands, absolute veto | **42.0%** |
+| new bands, absolute veto | 9.3% |
+| **new bands + the margin** | **1.1%** |
+
+and the vetoing letter's own score was a median 0.65–0.77, i.e. these were plain near-misses,
+which is what says the margin is the right instrument rather than a wider cone.
+
+A key now keeps the pick unless the collected butterfly beats it by `CFG.colBeatsKey` (0.45)
+on the same 0..1 score both were measured with. The two properties this needs, and has:
+
+- **a key actually aimed at scores near 0**, and no score can be 0.45 lower than that.
+  Spelling cannot break. Checked the other way round over 6000 trials: **0 letters lost.**
+- a butterfly aimed squarely at (0.00) beats a letter merely grazed (0.77), which is the
+  whole complaint.
+
+`pickRay` and `pickFlySticky` publish `_score` on the target they return — including at the
+hover lock's four separate exits, where the target handed back is *not* always the frame's
+best — so `keyBeatsCol` compares the two layers' winners without re-measuring anything.
 
 Three details worth not rediscovering:
 
@@ -586,6 +705,9 @@ Three details worth not rediscovering:
 - **Providers are cached only once every one the DOM has is up**, never on an empty scan.
   A-Frame's `initialized` is deferred (see "The three traps this build hit"), and caching an
   empty result on the first tick would lose the collection for the rest of the run.
+- **`gather()` is a method, not inline in `tick()`** — that is where the exclusivity rule
+  lives, and the harness calls it directly. Its first draft reimplemented the gathering
+  inside the test and duly passed while the real rule did nothing at all.
 
 ### Tested without a headset — `tools/reach/`
 
@@ -599,7 +721,7 @@ driven and tuned on a desktop. It only ever appears when no real hand is offerin
 inside an XR session.
 
 **`tools/reach/` runs the lot headless**, under JavaScriptCore — every Mac has one, and this
-machine has no node — against a maths-only THREE stub. 79 assertions, about a second:
+machine has no node — against a maths-only THREE stub. 117 assertions, about a second:
 
 ```bash
 sh tools/reach/run.sh
@@ -607,10 +729,19 @@ sh tools/reach/run.sh
 
 Run it after touching `hands.js`, `interact.js`, or `collection.js`'s states. It covers the
 handedness of the palm normal, every way of *not* offering a hand, the hold/release timers,
-the resting pose's axes and its degenerate case, both branches of the four-state arc,
-`summonMax`, a 300 ms frame, the handoff back onto the orbit, and the pick ladder including
-the ray-through-a-key case. Nothing renders: it checks **behaviour**, which is precisely the
-half that cannot be eyeballed.
+the resting pose's axes and its degenerate case, the broadside turn at every angle it draws,
+both branches of the four-state arc, the hover's wander and wingbeat, the exclusivity
+lockout, `summonMax`, a 300 ms frame, the handoff back onto the orbit, and the pick ladder
+including the margin case drawn from real sampled geometry. Nothing renders: it checks
+**behaviour**, which is precisely the half that cannot be eyeballed.
+
+Two rules the harness earned the hard way, both from tests that passed for the wrong reason:
+
+- **Never hard-code a beat's duration; wait on the state.** Every `frames(10)` in the file
+  went stale the day the collection's band moved closer and the approach got faster.
+- **Call the component's own method, never a reimplementation of it.** The exclusivity test's
+  first draft rebuilt the target-gathering inside the test, and passed while the real rule did
+  nothing — which is why `gather()` exists as a method at all.
 
 ## Flat, and how to keep it flat
 
@@ -1408,9 +1539,10 @@ butterflies:
   for the whole thing.
 - **Their own shell.** The 26 keys sit at 1.0–2.4 m — a tuned band that took three rounds
   of on-headset selection work (see the selection sections above). The collection flies
-  further out and taller (`CFG.col*`, ≈2.6–4.3 m) so it reads as the kaleidoscope around
-  you and the keyboard stays the near, actionable layer. Full circle regardless of
-  `CFG.arcSpan`.
+  closer but far higher (`CFG.col*` — 1.7–3.0 m out, 2.2–3.1 m up) so it reads as the
+  kaleidoscope above and around you while the keyboard stays the near, actionable layer.
+  **v9 lifted it there** to get it out of the letters' angular band — see "The two swarms
+  are separated in HEIGHT". Full circle regardless of `CFG.arcSpan`.
 - **Flight is a port of `keyboard.js:tickKey`** — `pathAt`, the offset spring, flap-glide,
   heading/bank, `presentRoll`, `separate` — with the capture states, the slow-field and
   the per-key clock stripped out. `keyboard.js:tickKey` is the **source of truth**: a
